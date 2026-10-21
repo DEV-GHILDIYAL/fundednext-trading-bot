@@ -88,7 +88,7 @@ export class LondonBreakoutDetector {
     close: number,
     breakoutDirection: 'UP' | 'DOWN'
   ): boolean {
-    const bodySize = Math.abs(close - (close > breakoutDirection === 'UP' ? low : high));
+    const bodySize = Math.abs(close - (breakoutDirection === 'UP' ? high : low));
     const wickSize =
       breakoutDirection === 'UP'
         ? Math.abs(high - close)
