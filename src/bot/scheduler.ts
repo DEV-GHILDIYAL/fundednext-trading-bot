@@ -148,9 +148,9 @@ export class BotScheduler {
    * Get task status
    */
   getStatus(): { taskName: string; running: boolean }[] {
-    return Array.from(this.tasks.entries()).map(([name, task]) => ({
+    return Array.from(this.tasks.entries()).map(([name]) => ({
       taskName: name,
-      running: task._running ?? false,
+      running: true,
     }));
   }
 }
