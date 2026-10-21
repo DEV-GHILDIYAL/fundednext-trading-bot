@@ -204,7 +204,7 @@ export class PriceActionAnalyzer {
         direction: trend === 'RANGING' ? 'NEUTRAL' : trend,
         strength: 40,
         confidence: 0.5,
-        description: `Market in ${trend} ${trend === 'NEUTRAL' ? 'range' : 'trend'}`,
+        description: `Market in ${trend} ${trend === 'RANGING' ? 'range' : 'trend'}`,
       };
     }
 

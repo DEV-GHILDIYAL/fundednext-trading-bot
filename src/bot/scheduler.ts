@@ -150,7 +150,7 @@ export class BotScheduler {
   getStatus(): { taskName: string; running: boolean }[] {
     return Array.from(this.tasks.entries()).map(([name, task]) => ({
       taskName: name,
-      running: !task.status,
+      running: task._running ?? false,
     }));
   }
 }
