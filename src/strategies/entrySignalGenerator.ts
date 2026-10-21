@@ -4,6 +4,7 @@ import { SupportResistanceCalculator, SRLevel } from './supportResistance';
 import { PriceActionAnalyzer, PriceActionSignal } from './priceAction';
 import { CandleData, PriceData } from '../api/market';
 import { Validator } from '../utils/validator';
+import { getPairSpec, roundPrice } from '../constants/pairs';
 
 export interface TradeSignal {
   pair: string;
@@ -21,9 +22,12 @@ export interface TradeSignal {
   };
 }
 
+const SR_SEARCH_RANGE_PIPS = 50;
+const REWARD_RATIO = 2;
+
 export class EntrySignalGenerator {
   /**
-   * Generate complete trade signal combining all strategy components
+   * Generate complete trade signal combining breakout + price action + S/R
    */
   static generateTradeSignal(
     pair: string,
@@ -33,156 +37,109 @@ export class EntrySignalGenerator {
     candles: CandleData[],
     atrPips: number
   ): TradeSignal {
-    logger.info(`🔍 Generating trade signal for ${pair}`);
-
     try {
-      Validator.validatePrice(currentPrice.bid, 'Current Price');
       Validator.validateTradingPair(pair);
+      Validator.validatePrice(currentPrice.bid, 'Current Price');
+      Validator.validatePrice(yesterdayHigh, 'Yesterday High');
+      Validator.validatePrice(yesterdayLow, 'Yesterday Low');
     } catch (error) {
-      logger.error('Signal generation validation failed:', error);
+      logger.warn(`Signal validation failed for ${pair}`, error);
       return this.skipSignal(pair, 'Validation failed');
     }
 
-    // Component 1: Breakout Detection
-    const breakoutSignal = LondonBreakoutDetector.detectBreakout(
-      currentPrice.bid,
+    const spec = getPairSpec(pair);
+    const bid = currentPrice.bid;
+
+    // 1. Breakout of previous range
+    const breakout = LondonBreakoutDetector.detectBreakout(
+      bid,
       yesterdayHigh,
       yesterdayLow,
-      currentPrice.bid > yesterdayHigh,
-      currentPrice.bid < yesterdayLow
+      bid > yesterdayHigh,
+      bid < yesterdayLow,
+      spec.pipSize
     );
 
-    // Component 2: Price Action Analysis
-    const priceActionSignal = PriceActionAnalyzer.generateSignal(candles, atrPips);
-
-    // Component 3: Support & Resistance
-    const srLevels = SupportResistanceCalculator.findLocalLevels(candles);
-    const nearestLevels = SupportResistanceCalculator.findNearestLevels(
-      currentPrice.bid,
-      srLevels
-    );
-
-    // Component 4: Combine all signals
-    const signal = this.combineSignals(
-      pair,
-      currentPrice.bid,
-      breakoutSignal,
-      priceActionSignal,
-      nearestLevels,
-      yesterdayHigh,
-      yesterdayLow
-    );
-
-    if (signal.signal !== 'SKIP') {
-      // Validate trade setup
-      const validation = SupportResistanceCalculator.validateEntryAgainstSR(
-        signal.entryPrice,
-        nearestLevels.support?.level || yesterdayLow,
-        nearestLevels.resistance?.level || yesterdayHigh,
-        signal.signal
-      );
-
-      if (!validation.valid) {
-        logger.warn(`Invalid entry setup: ${validation.reason}`);
-        return this.skipSignal(pair, validation.reason);
-      }
+    if (!breakout.detected || breakout.direction === null) {
+      return this.skipSignal(pair, 'No breakout detected');
     }
 
-    signal.components = {
-      breakout: breakoutSignal,
-      priceAction: priceActionSignal,
-      supportResistance: nearestLevels,
+    // 2. Price action must agree with breakout direction
+    const priceAction = PriceActionAnalyzer.generateSignal(candles, atrPips);
+    if (priceAction.direction !== breakout.direction) {
+      return this.skipSignal(pair, 'Price action not aligned with breakout');
+    }
+
+    // 3. Support / resistance around current price
+    const srLevels = SupportResistanceCalculator.findLocalLevels(candles);
+    const nearest = SupportResistanceCalculator.findNearestLevels(
+      bid,
+      srLevels,
+      SR_SEARCH_RANGE_PIPS * spec.pipSize
+    );
+
+    const side: 'BUY' | 'SELL' = breakout.direction === 'UP' ? 'BUY' : 'SELL';
+    const entryPrice = side === 'BUY' ? currentPrice.ask : currentPrice.bid;
+
+    // Do not buy straight into resistance / sell into support.
+    // Missing levels mean "no obstacle nearby".
+    const validation = SupportResistanceCalculator.validateEntryAgainstSR(
+      entryPrice,
+      nearest.support?.level ?? 0,
+      nearest.resistance?.level ?? Number.POSITIVE_INFINITY,
+      side
+    );
+    if (!validation.valid) {
+      return this.skipSignal(pair, validation.reason);
+    }
+
+    // Stop beyond nearest S/R, falling back to the broken range's opposite side
+    const stopLoss = SupportResistanceCalculator.calculateStopLoss(
+      entryPrice,
+      nearest.support?.level ?? yesterdayLow,
+      nearest.resistance?.level ?? yesterdayHigh,
+      side
+    );
+
+    const riskDistance = Math.abs(entryPrice - stopLoss);
+    if (riskDistance <= 0) {
+      return this.skipSignal(pair, 'Invalid stop distance');
+    }
+
+    const takeProfit =
+      side === 'BUY' ? entryPrice + riskDistance * REWARD_RATIO : entryPrice - riskDistance * REWARD_RATIO;
+    const confidence = Math.min((breakout.confidence + 0.1) * 0.9, 1);
+
+    const signal: TradeSignal = {
+      pair,
+      signal: side,
+      entryPrice: roundPrice(pair, entryPrice),
+      stopLoss: roundPrice(pair, stopLoss),
+      takeProfit: roundPrice(pair, takeProfit),
+      riskRewardRatio: REWARD_RATIO,
+      confidence: parseFloat(confidence.toFixed(2)),
+      reasoning:
+        `${side} breakout on ${pair}. Strength ${breakout.strength}/100. ` +
+        `Pattern ${priceAction.pattern}. R:R 1:${REWARD_RATIO}`,
+      components: {
+        breakout,
+        priceAction,
+        supportResistance: nearest,
+      },
     };
 
-    logger.info(`✅ Signal generated: ${signal.signal}`, {
+    logger.info(`🎯 Signal ${side} ${pair}`, {
+      entry: signal.entryPrice,
+      sl: signal.stopLoss,
+      tp: signal.takeProfit,
       confidence: signal.confidence,
-      rrRatio: signal.riskRewardRatio,
     });
 
     return signal;
   }
 
-  /**
-   * Combine all signal components into one decision
-   */
-  private static combineSignals(
-    pair: string,
-    currentPrice: number,
-    breakout: BreakoutSignal,
-    priceAction: PriceActionSignal,
-    srLevels: { support: SRLevel | null; resistance: SRLevel | null },
-    yesterdayHigh: number,
-    yesterdayLow: number
-  ): TradeSignal {
-    // Base decision on breakout + price action alignment
-    const breakoutConfirmed = breakout.detected && breakout.direction !== null;
-    const priceActionAligned =
-      (breakout.direction === 'UP' && priceAction.direction === 'UP') ||
-      (breakout.direction === 'DOWN' && priceAction.direction === 'DOWN');
-
-    if (!breakoutConfirmed) {
-      return this.skipSignal(pair, 'No breakout detected');
-    }
-
-    if (!priceActionAligned) {
-      return this.skipSignal(pair, 'Price action not aligned with breakout');
-    }
-
-    // Generate entry, SL, TP
-    const direction = breakout.direction! as 'UP' | 'DOWN';
-    const entryPrice = direction === 'UP' ? currentPrice : currentPrice;
-
-    const supportLevel = srLevels.support?.level || yesterdayLow;
-    const resistanceLevel = srLevels.resistance?.level || yesterdayHigh;
-
-    const stopLoss = SupportResistanceCalculator.calculateStopLoss(
-      entryPrice,
-      supportLevel,
-      resistanceLevel,
-      direction === 'UP' ? 'BUY' : 'SELL'
-    );
-
-    // Calculate TP for 1:2 ratio
-    const riskDistance = Math.abs(entryPrice - stopLoss);
-    const targetDistance = riskDistance * 2;
-    const takeProfit =
-      direction === 'UP'
-        ? entryPrice + targetDistance
-        : entryPrice - targetDistance;
-
-    const rrRatio = targetDistance / riskDistance;
-    const confidence = Math.min(
-      (breakout.confidence + (priceActionAligned ? 0.1 : 0)) * 0.9,
-      1
-    );
-
-    const reasoning =
-      `${direction === 'UP' ? 'Buy' : 'Sell'} breakout on ${pair}. ` +
-      `Breakout strength: ${breakout.strength}/100. ` +
-      `Pattern: ${priceAction.pattern}. ` +
-      `R:R Ratio: 1:${rrRatio.toFixed(2)}`;
-
-    return {
-      pair,
-      signal: direction === 'UP' ? 'BUY' : 'SELL',
-      entryPrice: parseFloat(entryPrice.toFixed(5)),
-      stopLoss: parseFloat(stopLoss.toFixed(5)),
-      takeProfit: parseFloat(takeProfit.toFixed(5)),
-      riskRewardRatio: parseFloat(rrRatio.toFixed(2)),
-      confidence: parseFloat(confidence.toFixed(2)),
-      reasoning,
-      components: {
-        breakout,
-        priceAction,
-        supportResistance: srLevels,
-      },
-    };
-  }
-
-  /**
-   * Generate skip signal
-   */
   private static skipSignal(pair: string, reason: string): TradeSignal {
+    logger.debug(`Skip ${pair}: ${reason}`);
     return {
       pair,
       signal: 'SKIP',
@@ -209,10 +166,7 @@ export class EntrySignalGenerator {
           confidence: 0,
           description: reason,
         },
-        supportResistance: {
-          support: null,
-          resistance: null,
-        },
+        supportResistance: { support: null, resistance: null },
       },
     };
   }

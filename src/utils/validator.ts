@@ -1,5 +1,5 @@
 import { ValidationError } from './errors';
-import { logger } from './logger';
+import { PAIR_LIST, isTradingPair } from '../constants/pairs';
 
 export class Validator {
   static validateApiKeys(apiKey: string, fieldName: string): void {
@@ -18,7 +18,7 @@ export class Validator {
   }
 
   static validateQuantity(quantity: number, fieldName: string = 'Quantity'): void {
-    if (quantity <= 0) {
+    if (!(quantity > 0) || !Number.isFinite(quantity)) {
       throw new ValidationError(
         `${fieldName} must be greater than 0`,
         fieldName
@@ -40,10 +40,9 @@ export class Validator {
   }
 
   static validateTradingPair(pair: string): void {
-    const validPairs = ['EURUSD', 'GBPUSD', 'XAUUSD'];
-    if (!validPairs.includes(pair)) {
+    if (!isTradingPair(pair)) {
       throw new ValidationError(
-        `${pair} is not a supported trading pair. Valid pairs: ${validPairs.join(', ')}`
+        `${pair} is not a supported trading pair. Valid pairs: ${PAIR_LIST.join(', ')}`
       );
     }
   }

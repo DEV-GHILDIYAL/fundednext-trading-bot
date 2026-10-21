@@ -20,7 +20,8 @@ export class LondonBreakoutDetector {
     yesterdayHigh: number,
     yesterdayLow: number,
     closeAboveHigh: boolean,
-    closeBelowLow: boolean
+    closeBelowLow: boolean,
+    pipSize: number = 0.0001
   ): BreakoutSignal {
     const breakoutAboveHigh = closeAboveHigh && currentPrice > yesterdayHigh;
     const breakoutBelowLow = closeBelowLow && currentPrice < yesterdayLow;
@@ -33,11 +34,11 @@ export class LondonBreakoutDetector {
     let breakoutPrice = 0;
 
     if (breakoutAboveHigh) {
-      const pips = Calculator.calculatePips(yesterdayHigh, currentPrice);
+      const pips = Calculator.calculatePips(yesterdayHigh, currentPrice, pipSize);
       strength = Math.min(pips * 2, 100); // Max 100
       breakoutPrice = currentPrice;
     } else if (breakoutBelowLow) {
-      const pips = Calculator.calculatePips(yesterdayLow, currentPrice);
+      const pips = Calculator.calculatePips(yesterdayLow, currentPrice, pipSize);
       strength = Math.min(pips * 2, 100); // Max 100
       breakoutPrice = currentPrice;
     }
@@ -109,8 +110,8 @@ export class LondonBreakoutDetector {
   /**
    * Calculate range width for breakout setup
    */
-  static calculateRangeWidth(high: number, low: number): number {
-    const width = Calculator.calculatePips(low, high);
+  static calculateRangeWidth(high: number, low: number, pipSize: number = 0.0001): number {
+    const width = Calculator.calculatePips(low, high, pipSize);
     logger.debug('Range width calculated', { width: `${width} pips` });
     return width;
   }
@@ -120,14 +121,15 @@ export class LondonBreakoutDetector {
    */
   static calculateEntryPrice(
     breakoutLevel: number,
-    direction: 'UP' | 'DOWN'
+    direction: 'UP' | 'DOWN',
+    pipSize: number = 0.0001
   ): number {
     // Entry on slight pullback or at breakout level
     const pullbackPips = 5; // 5 pips pullback
     const entry =
       direction === 'UP'
-        ? breakoutLevel - pullbackPips * 0.0001
-        : breakoutLevel + pullbackPips * 0.0001;
+        ? breakoutLevel - pullbackPips * pipSize
+        : breakoutLevel + pullbackPips * pipSize;
 
     return parseFloat(entry.toFixed(5));
   }

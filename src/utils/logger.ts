@@ -2,12 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../config';
 
-// Create logs directory if it doesn't exist
-const logsDir = config.logDir;
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
-
 enum LogLevel {
   DEBUG = 0,
   INFO = 1,
@@ -22,64 +16,88 @@ const levelMap: Record<string, LogLevel> = {
   error: LogLevel.ERROR,
 };
 
-const logLevelNames = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+const LEVEL_NAMES = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+const COLORS = ['\x1b[36m', '\x1b[32m', '\x1b[33m', '\x1b[31m'];
+const RESET = '\x1b[0m';
+const MAX_LOG_BYTES = 10 * 1024 * 1024; // rotate bot.log at 10 MB
 
-class Logger {
-  private currentLevel: LogLevel;
-  private logFile: string;
-
-  constructor(level: string = 'info') {
-    this.currentLevel = levelMap[level.toLowerCase()] || LogLevel.INFO;
-    this.logFile = path.join(logsDir, 'bot.log');
+function serialize(data: unknown): string {
+  if (data === undefined) return '';
+  if (data instanceof Error) {
+    return JSON.stringify({ name: data.name, message: data.message, stack: data.stack });
   }
-
-  private formatTimestamp(): string {
-    const now = new Date();
-    return now.toISOString();
-  }
-
-  private writeLog(level: LogLevel, message: string, data?: any): void {
-    if (level < this.currentLevel) return;
-
-    const levelName = logLevelNames[level];
-    const timestamp = this.formatTimestamp();
-    const logMessage = `[${timestamp}] [${levelName}] ${message}`;
-
-    // Console output with colors
-    const colors: Record<LogLevel, string> = {
-      [LogLevel.DEBUG]: '\x1b[36m', // Cyan
-      [LogLevel.INFO]: '\x1b[32m', // Green
-      [LogLevel.WARN]: '\x1b[33m', // Yellow
-      [LogLevel.ERROR]: '\x1b[31m', // Red
-    };
-
-    const reset = '\x1b[0m';
-    console.log(`${colors[level]}${logMessage}${reset}`, data || '');
-
-    // File output
-    try {
-      const fileMessage = `${logMessage}${data ? ' ' + JSON.stringify(data) : ''}\n`;
-      fs.appendFileSync(this.logFile, fileMessage, 'utf8');
-    } catch (err) {
-      console.error('Failed to write to log file:', err);
-    }
-  }
-
-  debug(message: string, data?: any): void {
-    this.writeLog(LogLevel.DEBUG, message, data);
-  }
-
-  info(message: string, data?: any): void {
-    this.writeLog(LogLevel.INFO, message, data);
-  }
-
-  warn(message: string, data?: any): void {
-    this.writeLog(LogLevel.WARN, message, data);
-  }
-
-  error(message: string, data?: any): void {
-    this.writeLog(LogLevel.ERROR, message, data);
+  try {
+    return JSON.stringify(data, (_key, value) =>
+      value instanceof Error ? { name: value.name, message: value.message } : value
+    );
+  } catch {
+    return String(data);
   }
 }
 
-export const logger = new Logger(config.logLevel);
+class Logger {
+  private currentLevel: LogLevel;
+  private logFile: string | null;
+
+  constructor(level: string = 'info', logDir: string = './logs') {
+    this.currentLevel = levelMap[level.toLowerCase()] ?? LogLevel.INFO;
+    this.logFile = null;
+    try {
+      fs.mkdirSync(logDir, { recursive: true });
+      this.logFile = path.join(logDir, 'bot.log');
+    } catch (err) {
+      console.error('Logger: cannot create log directory, file logging disabled', err);
+    }
+  }
+
+  private rotateIfNeeded(): void {
+    if (!this.logFile) return;
+    try {
+      if (fs.existsSync(this.logFile) && fs.statSync(this.logFile).size > MAX_LOG_BYTES) {
+        fs.renameSync(this.logFile, `${this.logFile}.1`);
+      }
+    } catch {
+      // rotation is best-effort
+    }
+  }
+
+  private write(level: LogLevel, message: string, data?: unknown): void {
+    if (level < this.currentLevel) return;
+
+    const line = `[${new Date().toISOString()}] [${LEVEL_NAMES[level]}] ${message}`;
+    const extra = serialize(data);
+    const output = extra ? `${line} ${extra}` : line;
+
+    if (level >= LogLevel.WARN) {
+      console.error(`${COLORS[level]}${output}${RESET}`);
+    } else {
+      console.log(`${COLORS[level]}${output}${RESET}`);
+    }
+
+    if (!this.logFile) return;
+    try {
+      this.rotateIfNeeded();
+      fs.appendFileSync(this.logFile, `${output}\n`, 'utf8');
+    } catch {
+      // never crash the bot because of logging
+    }
+  }
+
+  debug(message: string, data?: unknown): void {
+    this.write(LogLevel.DEBUG, message, data);
+  }
+
+  info(message: string, data?: unknown): void {
+    this.write(LogLevel.INFO, message, data);
+  }
+
+  warn(message: string, data?: unknown): void {
+    this.write(LogLevel.WARN, message, data);
+  }
+
+  error(message: string, data?: unknown): void {
+    this.write(LogLevel.ERROR, message, data);
+  }
+}
+
+export const logger = new Logger(config.debug ? 'debug' : config.logLevel, config.logDir);

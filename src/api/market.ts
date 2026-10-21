@@ -1,12 +1,13 @@
-import axios, { AxiosInstance } from 'axios';
-import { config } from '../config';
 import { logger } from '../utils/logger';
+import { getPairSpec, roundPrice } from '../constants/pairs';
+import { Calculator } from '../utils/calculator';
 
 export interface PriceData {
   pair: string;
   bid: number;
   ask: number;
   timestamp: Date;
+  /** Spread in pips */
   spread: number;
 }
 
@@ -19,178 +20,158 @@ export interface CandleData {
   volume?: number;
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const HISTORY_CANDLES = 72; // 3 days of 1H candles
+const TICK_INTERVAL_MS = 5000;
+
+interface FeedState {
+  price: number;
+  candles: CandleData[];
+  lastTick: number;
+}
+
+/**
+ * Market data source.
+ *
+ * NOTE: This is currently a SIMULATED feed (independent random walk per pair,
+ * with realistic price levels, spreads and hourly ranges). It is consistent
+ * over time so strategies behave sensibly, but it is NOT real market data.
+ * Replace the internals with an MT5 bridge / data provider for live use.
+ */
 export class MarketDataClient {
-  private client: AxiosInstance;
-  private baseURL = 'https://api.example.com/market'; // Replace with actual market data API
-  private cache: Map<string, { data: any; timestamp: number }> = new Map();
-  private cacheTTL = 60000; // 1 minute
+  readonly isSimulated = true;
+  private feeds = new Map<string, FeedState>();
 
-  constructor() {
-    this.client = axios.create({
-      baseURL: this.baseURL,
-      timeout: 5000,
-    });
-
-    this.client.interceptors.request.use((cfg) => {
-      logger.debug(`Market API Request: ${cfg.url}`);
-      return cfg;
-    });
-
-    this.client.interceptors.response.use(
-      (res) => {
-        logger.debug(`Market API Response: ${res.status}`);
-        return res;
-      },
-      (err) => {
-        logger.error('Market API Error:', {
-          status: err.response?.status,
-          message: err.message,
-        });
-        return Promise.reject(err);
-      }
-    );
+  private getFeed(pair: string): FeedState {
+    let state = this.feeds.get(pair);
+    if (!state) {
+      state = this.seedFeed(pair);
+      this.feeds.set(pair, state);
+    }
+    this.tick(pair, state);
+    return state;
   }
 
-  private getCacheKey(pair: string, timeframe?: string): string {
-    return timeframe ? `${pair}_${timeframe}` : pair;
-  }
+  private seedFeed(pair: string): FeedState {
+    const spec = getPairSpec(pair);
+    const currentHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+    const candles: CandleData[] = [];
+    let price = spec.mockBasePrice;
 
-  private getFromCache(key: string): any | null {
-    const cached = this.cache.get(key);
-    if (!cached) return null;
-
-    const isExpired = Date.now() - cached.timestamp > this.cacheTTL;
-    if (isExpired) {
-      this.cache.delete(key);
-      return null;
+    for (let i = HISTORY_CANDLES - 1; i >= 0; i--) {
+      const open = price;
+      const close = open + (Math.random() - 0.5) * spec.mockHourlyRange;
+      const high = Math.max(open, close) + Math.random() * spec.mockHourlyRange * 0.5;
+      const low = Math.min(open, close) - Math.random() * spec.mockHourlyRange * 0.5;
+      candles.push({
+        timestamp: new Date(currentHour - i * HOUR_MS),
+        open: roundPrice(pair, open),
+        high: roundPrice(pair, high),
+        low: roundPrice(pair, low),
+        close: roundPrice(pair, close),
+        volume: 1000,
+      });
+      price = close;
     }
 
-    return cached.data;
+    logger.debug(`Simulated feed seeded for ${pair}`, { price: roundPrice(pair, price) });
+    return { price, candles, lastTick: Date.now() };
   }
 
-  private setCache(key: string, data: any): void {
-    this.cache.set(key, {
-      data,
-      timestamp: Date.now(),
-    });
+  /** Advance the random walk and keep the current 1H candle up to date */
+  private tick(pair: string, state: FeedState): void {
+    const now = Date.now();
+    if (now - state.lastTick < TICK_INTERVAL_MS) return;
+
+    const spec = getPairSpec(pair);
+    const steps = Math.min(Math.floor((now - state.lastTick) / TICK_INTERVAL_MS), 720);
+    for (let i = 0; i < steps; i++) {
+      state.price += (Math.random() - 0.5) * spec.mockHourlyRange * 0.15;
+    }
+    state.lastTick = now;
+
+    const price = roundPrice(pair, state.price);
+    const bucket = Math.floor(now / HOUR_MS) * HOUR_MS;
+    const last = state.candles[state.candles.length - 1];
+
+    if (last.timestamp.getTime() === bucket) {
+      last.high = Math.max(last.high, price);
+      last.low = Math.min(last.low, price);
+      last.close = price;
+    } else {
+      state.candles.push({
+        timestamp: new Date(bucket),
+        open: last.close,
+        high: Math.max(last.close, price),
+        low: Math.min(last.close, price),
+        close: price,
+        volume: 1000,
+      });
+      if (state.candles.length > HISTORY_CANDLES) state.candles.shift();
+    }
   }
 
   async getCurrentPrice(pair: string): Promise<PriceData> {
-    try {
-      const cacheKey = this.getCacheKey(pair);
-      const cached = this.getFromCache(cacheKey);
+    const spec = getPairSpec(pair);
+    const state = this.getFeed(pair);
+    const bid = roundPrice(pair, state.price);
+    const ask = roundPrice(pair, state.price + spec.mockSpread);
 
-      if (cached) {
-        logger.debug(`✅ Price from cache: ${pair}`);
-        return cached;
-      }
-
-      // TODO: Replace with actual market data API call
-      // For now, return mock data
-      const mockData: PriceData = {
-        pair,
-        bid: 1.0950,
-        ask: 1.0952,
-        timestamp: new Date(),
-        spread: 0.0002,
-      };
-
-      this.setCache(cacheKey, mockData);
-      logger.info(`✅ Current price fetched: ${pair} → ${mockData.bid}`);
-
-      return mockData;
-    } catch (error) {
-      logger.error(`Failed to fetch price for ${pair}:`, error);
-      throw error;
-    }
+    logger.debug(`Price ${pair}: ${bid}/${ask}`);
+    return {
+      pair,
+      bid,
+      ask,
+      timestamp: new Date(),
+      spread: Calculator.calculateSpread(bid, ask, spec.pipSize),
+    };
   }
 
-  async getCandles(
-    pair: string,
-    timeframe: string = '1H',
-    limit: number = 100
-  ): Promise<CandleData[]> {
-    try {
-      const cacheKey = this.getCacheKey(pair, timeframe);
-      const cached = this.getFromCache(cacheKey);
-
-      if (cached) {
-        logger.debug(`✅ Candles from cache: ${pair} ${timeframe}`);
-        return cached;
-      }
-
-      // TODO: Replace with actual market data API call
-      // For now, return mock data
-      const mockCandles: CandleData[] = [];
-      let basePrice = 1.0950;
-
-      for (let i = limit; i > 0; i--) {
-        mockCandles.push({
-          timestamp: new Date(Date.now() - i * 3600000),
-          open: basePrice,
-          high: basePrice + 0.0050,
-          low: basePrice - 0.0050,
-          close: basePrice + 0.0025,
-          volume: 1000000,
-        });
-        basePrice += (Math.random() - 0.5) * 0.0100;
-      }
-
-      this.setCache(cacheKey, mockCandles);
-      logger.info(`✅ Candles fetched: ${pair} ${timeframe} (${mockCandles.length})`);
-
-      return mockCandles;
-    } catch (error) {
-      logger.error(`Failed to fetch candles for ${pair}:`, error);
-      throw error;
-    }
+  /** Returns 1H candles (oldest first). Only the 1H timeframe is supported. */
+  async getCandles(pair: string, _timeframe: string = '1H', limit: number = 100): Promise<CandleData[]> {
+    const state = this.getFeed(pair);
+    return state.candles.slice(-limit).map((c) => ({ ...c }));
   }
 
+  /** Average True Range in pips */
   async calculateATR(pair: string, period: number = 14): Promise<number> {
-    try {
-      const candles = await this.getCandles(pair, '1H', period + 10);
+    const spec = getPairSpec(pair);
+    const candles = await this.getCandles(pair, '1H', period + 1);
+    if (candles.length < 2) return 0;
 
-      let tr_sum = 0;
-      for (let i = 1; i < candles.length; i++) {
-        const curr = candles[i];
-        const prev = candles[i - 1];
-
-        const tr1 = curr.high - curr.low;
-        const tr2 = Math.abs(curr.high - prev.close);
-        const tr3 = Math.abs(curr.low - prev.close);
-
-        const tr = Math.max(tr1, tr2, tr3);
-        tr_sum += tr;
-      }
-
-      const atr = tr_sum / period;
-      const atrPips = atr / 0.0001; // Convert to pips for forex
-
-      logger.info(`✅ ATR calculated: ${pair} → ${atrPips.toFixed(2)} pips`);
-
-      return atrPips;
-    } catch (error) {
-      logger.error(`Failed to calculate ATR for ${pair}:`, error);
-      throw error;
+    let trSum = 0;
+    for (let i = 1; i < candles.length; i++) {
+      const curr = candles[i];
+      const prevClose = candles[i - 1].close;
+      trSum += Math.max(
+        curr.high - curr.low,
+        Math.abs(curr.high - prevClose),
+        Math.abs(curr.low - prevClose)
+      );
     }
+
+    const atrPips = trSum / (candles.length - 1) / spec.pipSize;
+    return parseFloat(atrPips.toFixed(2));
   }
 
   async validateConnection(): Promise<boolean> {
     try {
       await this.getCurrentPrice('EURUSD');
-      logger.info('✅ Market API connection validated');
+      if (this.isSimulated) {
+        logger.warn('⚠️ Market data: SIMULATED feed (not real prices). Paper trading only.');
+      } else {
+        logger.info('✅ Market data connection validated');
+      }
       return true;
     } catch (error) {
-      logger.error('❌ Market API connection failed');
+      logger.error('❌ Market data connection failed', error);
       return false;
     }
   }
 
   clearCache(): void {
-    this.cache.clear();
-    logger.info('✅ Market data cache cleared');
+    this.feeds.clear();
   }
 }
 
-// Create singleton instance
 export const marketClient = new MarketDataClient();

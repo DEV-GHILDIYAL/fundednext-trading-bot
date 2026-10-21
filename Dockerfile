@@ -1,49 +1,31 @@
-# Multi-stage build
-FROM node:18-alpine AS builder
-
+# ---- Build stage ----
+FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
-COPY tsconfig.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm ci --only=production && \
-    npm ci --only=development
-
-# Copy source
+COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
+RUN npm run build && npm prune --omit=dev
 
-# Build TypeScript
-RUN npm run build
-
-# Production stage
-FROM node:18-alpine
-
+# ---- Runtime stage ----
+FROM node:20-alpine
 WORKDIR /app
 
-# Install dumb-init for proper signal handling
-RUN apk add --no-cache dumb-init
+RUN apk add --no-cache dumb-init tzdata
+ENV NODE_ENV=production \
+    TZ=Asia/Kolkata
 
-# Copy from builder
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package*.json ./
+COPY package*.json ./
 
-# Create required directories
-RUN mkdir -p logs data config
+RUN mkdir -p logs data && chown -R node:node /app
+USER node
 
-# Non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S trading -u 1001 && \
-    chown -R trading:nodejs /app
+HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
+  CMD pgrep -f "node dist/index.js" > /dev/null || exit 1
 
-USER trading
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD node -e "console.log('healthy')" || exit 1
-
-# Run with dumb-init
-ENTRYPOINT ["/sbin/dumb-init", "--"]
-CMD ["node", "dist/src/index.js"]
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+CMD ["node", "dist/index.js"]

@@ -1,159 +1,78 @@
 import * as cron from 'node-cron';
 import { logger } from '../utils/logger';
+import { config } from '../config';
 import { riskManager } from '../services/riskManager';
 import { tradeMonitor } from '../services/tradeMonitor';
-import { config } from '../config';
+import { bot } from './bot';
+import { isWithinTradingSession } from '../utils/time';
 
 export class BotScheduler {
   private tasks: Map<string, cron.ScheduledTask> = new Map();
 
-  /**
-   * Initialize all scheduled tasks
-   */
   initialize(): void {
-    logger.info('⏰ Initializing scheduler...');
+    if (this.tasks.size > 0) return;
 
-    // Task 1: Daily reset at midnight IST
-    this.scheduleDailyReset();
+    const opts = { timezone: config.timezone };
 
-    // Task 2: Market open notification
-    this.scheduleMarketOpen();
-
-    // Task 3: Market close - force close all positions
-    this.scheduleMarketClose();
-
-    // Task 4: Hourly report
-    this.scheduleHourlyReport();
-
-    logger.info('✅ Scheduler initialized with 4 tasks');
-  }
-
-  /**
-   * Daily reset at 00:00 IST (previous day closing)
-   */
-  private scheduleDailyReset(): void {
-    // Every day at 12:00 AM IST (= 6:30 PM UTC previous day)
-    const task = cron.schedule('0 0 * * *', () => {
-      logger.info('🔄 Daily reset triggered');
-
-      // Get end-of-day stats
-      const stats = tradeMonitor.getStatistics();
-      logger.info('📊 End of Day Report:');
-      logger.info(`   Total Trades: ${stats.openTrades}`);
-      logger.info(`   Daily P&L: $${stats.totalPnL.toFixed(2)}`);
-      logger.info(`   Winning: ${stats.winningTrades} | Losing: ${stats.losingTrades}`);
-
-      // Reset daily counters
+    // Daily reset at midnight (bot timezone)
+    this.add('dailyReset', '0 0 * * *', opts, () => {
       riskManager.resetDaily();
-      tradeMonitor.getOpenTrades().forEach((trade) => {
-        tradeMonitor.removeTrade(trade.tradeId);
-      });
-
-      logger.info('✅ Daily reset complete');
     });
 
-    this.tasks.set('dailyReset', task);
-  }
-
-  /**
-   * Market open notification (London Open)
-   */
-  private scheduleMarketOpen(): void {
-    // Every weekday at 1:30 PM IST (8:00 AM GMT)
-    // Cron: minute hour * * 1-5 (Monday to Friday)
-    const task = cron.schedule(
-      `${config.londonOpenMinute} ${config.londonOpenHour} * * 1-5`,
-      () => {
-        logger.info('╔════════════════════════════════════════╗');
-        logger.info('║     📈 London Session Opened         ║');
-        logger.info('║  Scanning for trade opportunities...  ║');
-        logger.info('╚════════════════════════════════════════╝');
-      }
-    );
-
-    this.tasks.set('marketOpen', task);
-  }
-
-  /**
-   * Market close - force close all positions
-   */
-  private scheduleMarketClose(): void {
-    // Every weekday at 5:00 PM IST (11:30 AM GMT)
-    const task = cron.schedule(
-      `${config.londonCloseMinute} ${config.londonCloseHour} * * 1-5`,
-      () => {
-        logger.info('╔════════════════════════════════════════╗');
-        logger.info('║     📉 London Session Closing         ║');
-        logger.info('║   Force closing all positions...      ║');
-        logger.info('╚════════════════════════════════════════╝');
-
-        // Close all open trades
-        const openTrades = tradeMonitor.getOpenTrades();
-        for (const trade of openTrades) {
-          // TODO: Execute close order
-          logger.info(`   ❌ Closing ${trade.pair} @ ${trade.currentPrice}`);
-          tradeMonitor.removeTrade(trade.tradeId);
-        }
-
-        logger.info('✅ All positions closed for session end');
-      }
-    );
-
-    this.tasks.set('marketClose', task);
-  }
-
-  /**
-   * Hourly report during trading hours
-   */
-  private scheduleHourlyReport(): void {
-    // Every hour at :00 minute
-    const task = cron.schedule('0 * * * *', () => {
-      const now = new Date();
-      const hour = now.getHours();
-
-      // Only during trading hours (1 PM - 5 PM IST)
-      if (hour >= config.londonOpenHour && hour <= config.londonCloseHour) {
-        const stats = tradeMonitor.getStatistics();
-        const riskStatus = riskManager.getStatus();
-
-        logger.info('📊 Hourly Report:');
-        logger.info(
-          `   Open Positions: ${stats.openTrades} | Daily P&L: $${stats.totalPnL.toFixed(2)}`
-        );
-        logger.info(
-          `   Trades Used: ${riskStatus.tradesExecuted}/${config.maxTradesPerDay} | Loss: $${riskStatus.dailyLossAmount.toFixed(2)}/${config.maxDailyLoss}`
-        );
-      }
+    // Session open notice (Mon–Fri)
+    this.add('marketOpen', `${config.londonOpenMinute} ${config.londonOpenHour} * * 1-5`, opts, () => {
+      logger.info('🔔 London session open');
     });
 
-    this.tasks.set('hourlyReport', task);
+    // Session close: force-close everything (Mon–Fri)
+    this.add('marketClose', `${config.londonCloseMinute} ${config.londonCloseHour} * * 1-5`, opts, () => {
+      logger.info('🔔 London session close — closing all positions');
+      bot.closeAllPositions('Session close').catch((error) => logger.error('Session close failed', error));
+    });
+
+    // Hourly report during the session
+    this.add('hourlyReport', '0 * * * *', opts, () => {
+      if (!isWithinTradingSession()) return;
+      const stats = tradeMonitor.getStatistics();
+      const risk = riskManager.getStatus();
+      logger.info(
+        `🕐 Hourly: Open ${stats.openTrades} | Unrealized $${stats.totalPnL.toFixed(2)} | ` +
+          `Realized $${risk.dailyLossAmount.toFixed(2)} | Trades ${risk.tradesExecuted}/${config.maxTradesPerDay}`
+      );
+    });
+
+    logger.info(`⏰ Scheduler ready (${this.tasks.size} tasks, timezone ${config.timezone})`);
   }
 
-  /**
-   * Stop all scheduled tasks
-   */
-  stopAll(): void {
-    logger.info('⏹️ Stopping all scheduled tasks...');
-
-    for (const [name, task] of this.tasks.entries()) {
-      task.stop();
-      logger.info(`   ✅ ${name} stopped`);
+  private add(name: string, expression: string, options: { timezone: string }, job: () => void): void {
+    if (!cron.validate(expression)) {
+      logger.error(`Invalid cron expression for ${name}: "${expression}"`);
+      return;
     }
-
-    this.tasks.clear();
-    logger.info('✅ All scheduled tasks stopped');
+    const task = cron.schedule(
+      expression,
+      () => {
+        try {
+          job();
+        } catch (error) {
+          logger.error(`Scheduled task ${name} failed`, error);
+        }
+      },
+      options
+    );
+    this.tasks.set(name, task);
   }
 
-  /**
-   * Get task status
-   */
+  stopAll(): void {
+    for (const task of this.tasks.values()) task.stop();
+    this.tasks.clear();
+    logger.info('⏹️ Scheduler stopped');
+  }
+
+  /** Tasks are removed from the map when stopped, so every listed task is running */
   getStatus(): { taskName: string; running: boolean }[] {
-    return Array.from(this.tasks.entries()).map(([name]) => ({
-      taskName: name,
-      running: true,
-    }));
+    return Array.from(this.tasks.keys()).map((taskName) => ({ taskName, running: true }));
   }
 }
 
-// Export singleton
 export const scheduler = new BotScheduler();

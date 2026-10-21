@@ -1,108 +1,51 @@
-import { logger } from './logger';
-
 export class Calculator {
   /**
-   * Calculate position size based on risk amount and stop loss distance
+   * Position size in UNITS (not lots) so that hitting the stop loses exactly `riskAmount`.
+   * Valid for USD-quoted symbols (EURUSD, GBPUSD, XAUUSD): P&L(USD) = priceDiff * units.
    */
-  static calculatePositionSize(
-    riskAmount: number,
-    entryPrice: number,
-    stopLossPrice: number,
-    pipValue: number = 0.0001
-  ): number {
-    const pipDistance = Math.abs((entryPrice - stopLossPrice) / pipValue);
-    if (pipDistance <= 0) {
-      logger.error('Invalid pip distance:', { entryPrice, stopLossPrice });
-      return 0;
-    }
-
-    const positionSize = (riskAmount * 10000) / (pipDistance * 1);
-    logger.debug('Position size calculated', {
-      riskAmount,
-      pipDistance,
-      positionSize: positionSize.toFixed(2),
-    });
-
-    return parseFloat(positionSize.toFixed(2));
+  static calculatePositionSize(riskAmount: number, entryPrice: number, stopLossPrice: number): number {
+    const stopDistance = Math.abs(entryPrice - stopLossPrice);
+    if (stopDistance <= 0 || !Number.isFinite(stopDistance)) return 0;
+    return parseFloat((riskAmount / stopDistance).toFixed(4));
   }
 
-  /**
-   * Calculate take profit price for 1:2 reward ratio
-   */
+  /** Convert units to lots for a given contract size (100000 for FX, 100 for gold) */
+  static unitsToLots(units: number, contractSize: number): number {
+    return parseFloat((units / contractSize).toFixed(2));
+  }
+
   static calculateTakeProfit(
     entryPrice: number,
     stopLossPrice: number,
     type: 'BUY' | 'SELL',
     ratio: number = 2
   ): number {
-    const riskDistance = Math.abs(entryPrice - stopLossPrice);
-    const targetDistance = riskDistance * ratio;
-
-    const tp =
-      type === 'BUY'
-        ? entryPrice + targetDistance
-        : entryPrice - targetDistance;
-
-    logger.debug('Take profit calculated', {
-      entryPrice,
-      stopLossPrice,
-      type,
-      ratio,
-      tp: tp.toFixed(5),
-    });
-
+    const targetDistance = Math.abs(entryPrice - stopLossPrice) * ratio;
+    const tp = type === 'BUY' ? entryPrice + targetDistance : entryPrice - targetDistance;
     return parseFloat(tp.toFixed(5));
   }
 
-  /**
-   * Calculate pip distance
-   */
-  static calculatePips(price1: number, price2: number): number {
-    const pips = Math.abs((price1 - price2) / 0.0001);
-    return parseFloat(pips.toFixed(1));
+  static calculatePips(price1: number, price2: number, pipSize: number = 0.0001): number {
+    return parseFloat(Math.abs((price1 - price2) / pipSize).toFixed(1));
   }
 
-  /**
-   * Calculate profit/loss
-   */
-  static calculatePnL(
-    entryPrice: number,
-    exitPrice: number,
-    quantity: number,
-    type: 'BUY' | 'SELL'
-  ): number {
-    const priceDiff =
-      type === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice;
-    const pnl = priceDiff * quantity * 10000;
-    return parseFloat(pnl.toFixed(2));
+  /** P&L in USD for a position of `units` */
+  static calculatePnL(entryPrice: number, exitPrice: number, units: number, type: 'BUY' | 'SELL'): number {
+    const priceDiff = type === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice;
+    return parseFloat((priceDiff * units).toFixed(2));
   }
 
-  /**
-   * Calculate win rate
-   */
   static calculateWinRate(winTrades: number, totalTrades: number): number {
     if (totalTrades === 0) return 0;
-    const rate = (winTrades / totalTrades) * 100;
-    return parseFloat(rate.toFixed(2));
+    return parseFloat(((winTrades / totalTrades) * 100).toFixed(2));
   }
 
-  /**
-   * Calculate risk reward ratio
-   */
-  static calculateRRRatio(
-    riskAmount: number,
-    rewardAmount: number
-  ): number {
+  static calculateRRRatio(riskAmount: number, rewardAmount: number): number {
     if (riskAmount <= 0) return 0;
-    const ratio = rewardAmount / riskAmount;
-    return parseFloat(ratio.toFixed(2));
+    return parseFloat((rewardAmount / riskAmount).toFixed(2));
   }
 
-  /**
-   * Calculate spread in pips
-   */
-  static calculateSpread(bid: number, ask: number): number {
-    const spread = (ask - bid) / 0.0001;
-    return parseFloat(spread.toFixed(1));
+  static calculateSpread(bid: number, ask: number, pipSize: number = 0.0001): number {
+    return parseFloat(((ask - bid) / pipSize).toFixed(1));
   }
 }

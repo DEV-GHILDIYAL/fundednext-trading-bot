@@ -9,141 +9,93 @@ export interface RiskCheckResult {
 }
 
 export class RiskManager {
-  private dailyLossAmount: number = 0;
-  private tradesExecutedToday: number = 0;
-  private dailyLossSafetyHit: boolean = false;
+  /** Realized P&L for today (negative = loss) */
+  private dailyLossAmount = 0;
+  private tradesExecutedToday = 0;
+  private wins = 0;
+  private losses = 0;
+  private safetyBufferHit = false;
 
   /**
-   * Check if new trade can be placed
+   * Can a new trade be opened? Uses realized + unrealized P&L.
    */
-  canPlaceTrade(): RiskCheckResult {
-    // Check 1: Daily loss limit
-    if (this.dailyLossAmount <= -config.maxDailyLoss) {
-      return {
-        allowed: false,
-        reason: `Daily loss limit reached ($${config.maxDailyLoss})`,
-        dailyLossRemaining: 0,
-        tradesLeftToday: 0,
-      };
+  canPlaceTrade(unrealizedPnL: number = 0): RiskCheckResult {
+    const total = this.dailyLossAmount + unrealizedPnL;
+    const remaining = Math.max(0, config.maxDailyLoss + total);
+
+    if (total <= -config.maxDailyLoss) {
+      return { allowed: false, reason: `Daily loss limit reached ($${config.maxDailyLoss})`, dailyLossRemaining: 0, tradesLeftToday: 0 };
     }
 
-    // Check 2: Safety buffer
-    if (this.dailyLossAmount <= -config.safetyBuffer) {
-      if (!this.dailyLossSafetyHit) {
-        this.dailyLossSafetyHit = true;
-        logger.warn(`⚠️ SAFETY BUFFER HIT! No more trades for rest of day.`);
+    if (this.safetyBufferHit || total <= -config.safetyBuffer) {
+      if (!this.safetyBufferHit) {
+        this.safetyBufferHit = true;
+        logger.warn(`⚠️ SAFETY BUFFER HIT ($${config.safetyBuffer}). No new trades for rest of day.`);
       }
-      return {
-        allowed: false,
-        reason: `Safety buffer reached ($${config.safetyBuffer}). No trades for rest of day.`,
-        dailyLossRemaining: 0,
-        tradesLeftToday: 0,
-      };
+      return { allowed: false, reason: `Safety buffer reached ($${config.safetyBuffer})`, dailyLossRemaining: remaining, tradesLeftToday: 0 };
     }
 
-    // Check 3: Max trades per day
     if (this.tradesExecutedToday >= config.maxTradesPerDay) {
-      return {
-        allowed: false,
-        reason: `Max ${config.maxTradesPerDay} trades per day reached`,
-        dailyLossRemaining: config.maxDailyLoss + this.dailyLossAmount,
-        tradesLeftToday: 0,
-      };
+      return { allowed: false, reason: `Max ${config.maxTradesPerDay} trades per day reached`, dailyLossRemaining: remaining, tradesLeftToday: 0 };
     }
 
     return {
       allowed: true,
       reason: 'Risk checks passed',
-      dailyLossRemaining: config.maxDailyLoss + this.dailyLossAmount,
+      dailyLossRemaining: remaining,
       tradesLeftToday: config.maxTradesPerDay - this.tradesExecutedToday,
     };
   }
 
-  /**
-   * Validate trade parameters
-   */
-  validateTradeRisk(
-    entryPrice: number,
-    stopLossPrice: number,
-    riskAmount: number = config.riskPerTrade
-  ): {
-    valid: boolean;
-    reason: string;
-  } {
-    // Check 1: Risk per trade
-    if (riskAmount > config.riskPerTrade) {
-      return {
-        valid: false,
-        reason: `Risk per trade ($${riskAmount}) exceeds limit ($${config.riskPerTrade})`,
-      };
-    }
-
-    // Check 2: Minimum profit potential
-    const distance = Math.abs(entryPrice - stopLossPrice);
-    const minProfit = distance * 2; // 1:2 ratio minimum
-
-    if (minProfit < config.riskPerTrade) {
-      return {
-        valid: false,
-        reason: `Minimum profit potential ($${minProfit.toFixed(2)}) below risk amount`,
-      };
-    }
-
-    return {
-      valid: true,
-      reason: 'Trade risk parameters valid',
-    };
-  }
-
-  /**
-   * Record trade execution
-   */
-  recordTrade(pnl: number): void {
+  recordTradeOpened(): void {
     this.tradesExecutedToday++;
-    this.dailyLossAmount += pnl;
+    logger.info(`🧮 Trades today: ${this.tradesExecutedToday}/${config.maxTradesPerDay}`);
+  }
 
-    const status = pnl > 0 ? '✅ WIN' : '❌ LOSS';
-    logger.info(`${status} | Daily P&L: $${this.dailyLossAmount.toFixed(2)} | Trades: ${this.tradesExecutedToday}/${config.maxTradesPerDay}`);
+  recordTradeClosed(pnl: number): void {
+    this.dailyLossAmount = parseFloat((this.dailyLossAmount + pnl).toFixed(2));
+    if (pnl > 0) this.wins++;
+    else if (pnl < 0) this.losses++;
 
-    // Check if safety buffer should be hit after this trade
-    if (this.dailyLossAmount <= -config.safetyBuffer && !this.dailyLossSafetyHit) {
-      this.dailyLossSafetyHit = true;
-      logger.warn(`⚠️ SAFETY BUFFER TRIGGERED! No more trades today.`);
+    logger.info(`${pnl >= 0 ? '✅ WIN' : '❌ LOSS'} $${pnl.toFixed(2)} | Daily P&L: $${this.dailyLossAmount.toFixed(2)}`);
+
+    if (this.dailyLossAmount <= -config.safetyBuffer && !this.safetyBufferHit) {
+      this.safetyBufferHit = true;
+      logger.warn(`⚠️ SAFETY BUFFER TRIGGERED. No more trades today.`);
     }
   }
 
-  /**
-   * Reset daily counters (at EOD or next day)
-   */
   resetDaily(): void {
-    logger.info(`📊 Daily Stats: P&L $${this.dailyLossAmount.toFixed(2)} | Trades: ${this.tradesExecutedToday}`);
-    
+    logger.info(
+      `📊 Day closed: P&L $${this.dailyLossAmount.toFixed(2)} | Trades ${this.tradesExecutedToday} | W ${this.wins} / L ${this.losses}`
+    );
     this.dailyLossAmount = 0;
     this.tradesExecutedToday = 0;
-    this.dailyLossSafetyHit = false;
-
-    logger.info('🔄 Daily counters reset');
+    this.wins = 0;
+    this.losses = 0;
+    this.safetyBufferHit = false;
+    logger.info('🔄 Daily risk counters reset');
   }
 
-  /**
-   * Get risk status
-   */
   getStatus(): {
     dailyLossAmount: number;
     dailyLossRemaining: number;
     tradesExecuted: number;
     tradesRemaining: number;
     safetyBufferHit: boolean;
+    wins: number;
+    losses: number;
   } {
     return {
       dailyLossAmount: this.dailyLossAmount,
-      dailyLossRemaining: config.maxDailyLoss + this.dailyLossAmount,
+      dailyLossRemaining: Math.max(0, config.maxDailyLoss + this.dailyLossAmount),
       tradesExecuted: this.tradesExecutedToday,
       tradesRemaining: Math.max(0, config.maxTradesPerDay - this.tradesExecutedToday),
-      safetyBufferHit: this.dailyLossSafetyHit,
+      safetyBufferHit: this.safetyBufferHit,
+      wins: this.wins,
+      losses: this.losses,
     };
   }
 }
 
-// Export singleton
 export const riskManager = new RiskManager();

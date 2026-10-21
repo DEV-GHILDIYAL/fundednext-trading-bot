@@ -107,17 +107,17 @@ describe('Strategy Tests', () => {
     ];
 
     it('should analyze uptrend', () => {
-      const trend = PriceActionAnalyzer.analyzeTrend(mockCandles);
+      const trend = PriceActionAnalyzer.analyzeTrend(mockCandles, 3);
       expect(trend).toBe('UP');
     });
 
     it('should calculate momentum', () => {
-      const momentum = PriceActionAnalyzer.calculateMomentum(mockCandles);
+      const momentum = PriceActionAnalyzer.calculateMomentum(mockCandles, 2);
       expect(momentum).toBeGreaterThan(0);
     });
 
     it('should analyze volatility', () => {
-      const volatility = PriceActionAnalyzer.analyzeVolatility(mockCandles);
+      const volatility = PriceActionAnalyzer.analyzeVolatility(mockCandles, 3);
       expect(volatility).toBeGreaterThan(0);
     });
   });

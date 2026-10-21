@@ -1,53 +1,65 @@
-import dotenv from 'dotenv';
+import { config } from './config';
 import { logger } from './utils/logger';
 import { bot } from './bot/bot';
 import { scheduler } from './bot/scheduler';
-import { config } from './config';
+import { getZonedTime, formatClock } from './utils/time';
 
-// Load environment variables
-dotenv.config();
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`Received ${signal} — shutting down gracefully`);
+
+  // Hard stop if graceful shutdown hangs
+  setTimeout(() => process.exit(0), 4000).unref();
+
+  try {
+    scheduler.stopAll();
+    bot.stop();
+    await bot.closeAllPositions('Process shutdown');
+  } catch (error) {
+    logger.error('Error during shutdown', error);
+  }
+  process.exit(0);
+}
+
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('unhandledRejection', (reason) => logger.error('Unhandled promise rejection', reason));
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception — exiting', error);
+  process.exit(1);
+});
 
 async function main(): Promise<void> {
-  try {
-    logger.info('╔════════════════════════════════════════╗');
-    logger.info('║  🚀 FundedNext Trading Bot - Phase 5  ║');
-    logger.info('║     Bot Loop & Scheduling Ready       ║');
-    logger.info('╚════════════════════════════════════════╝');
-    logger.info('');
+  const now = getZonedTime();
+  logger.info('════════════════════════════════════════');
+  logger.info('  🚀 FundedNext Trading Bot');
+  logger.info('════════════════════════════════════════');
+  logger.info(`Environment: ${config.nodeEnv} | Node ${process.version}`);
+  logger.info(`Time: ${now.dateKey} ${formatClock(now)} (${config.timezone})`);
+  logger.info(`Bot enabled: ${config.botEnabled} | Dry run: ${config.dryRun}`);
+  logger.info(
+    `Risk: $${config.riskPerTrade}/trade | Safety buffer $${config.safetyBuffer} | ` +
+      `Max daily loss $${config.maxDailyLoss} | Max ${config.maxTradesPerDay} trades/day`
+  );
 
-    logger.info(`Environment: ${config.nodeEnv}`);
-    logger.info(`Dry Run Mode: ${config.dryRun}`);
-    logger.info(`Account Balance: $${config.accountBalance}`);
-    logger.info(`Bot Enabled: ${config.botEnabled}`);
-    logger.info('');
+  scheduler.initialize();
 
-    // Initialize scheduler
-    logger.info('Step 1: Initializing scheduler...');
-    scheduler.initialize();
-    logger.info('');
-
-    // Start bot
-    logger.info('Step 2: Starting bot loop...');
-    if (config.botEnabled) {
-      await bot.start();
-    } else {
-      logger.warn(
-        '⚠️ Bot is disabled (BOT_ENABLED=false). Set to true to start trading.'
-      );
-      logger.info('');
-      logger.info('To enable the bot:');
-      logger.info('1. Open .env file');
-      logger.info('2. Change: BOT_ENABLED=true');
-      logger.info('3. Change: DRY_RUN=false (to trade with real money)');
-      logger.info('4. Restart bot');
-    }
-  } catch (error) {
-    logger.error('Fatal error in main:', error);
-    process.exit(1);
+  if (!config.botEnabled) {
+    logger.warn('⚠️ BOT_ENABLED=false — trading loop not started. Set BOT_ENABLED=true in .env and restart.');
+    return; // scheduler keeps the process alive
   }
+
+  if (!config.dryRun) {
+    logger.warn('⚠️ DRY_RUN=false but live MT5 execution is not implemented — orders will be refused.');
+  }
+
+  await bot.start();
 }
 
 main().catch((error) => {
-  logger.error('Unhandled error:', error);
+  logger.error('Fatal error in main', error);
   process.exit(1);
 });

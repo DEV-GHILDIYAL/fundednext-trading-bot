@@ -53,7 +53,7 @@ Automated London Breakout + Support/Resistance trading bot for FundedNext.
 ## Tech Stack
 
 **Language**: TypeScript 5.0+  
-**Runtime**: Node.js 18 LTS  
+**Runtime**: Node.js 20 LTS  
 **Database**: SQLite3  
 **Testing**: Jest  
 **Logging**: Winston + Pino  

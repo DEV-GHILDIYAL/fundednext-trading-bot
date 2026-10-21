@@ -4,291 +4,234 @@ import { marketClient } from '../api/market';
 import { claudeClient } from '../api/claude';
 import { EntrySignalGenerator } from '../strategies/entrySignalGenerator';
 import { tradeExecutor } from '../services/tradeExecutor';
-import { tradeMonitor } from '../services/tradeMonitor';
+import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
 import { riskManager } from '../services/riskManager';
+import { Calculator } from '../utils/calculator';
 import { PAIR_LIST, TradingPair } from '../constants/pairs';
+import { getZonedTime, formatClock, isWithinTradingSession } from '../utils/time';
+
+const MIN_CANDLES = 26; // 24 for previous range + current + 1 spare
 
 export class TradingBot {
-  private isRunning: boolean = false;
-  private currentCycle: number = 0;
+  private isRunning = false;
+  private currentCycle = 0;
+  private lastSessionState: boolean | null = null;
+  private sleepTimer: NodeJS.Timeout | null = null;
+  private wake: (() => void) | null = null;
+  private closing = false;
 
-  /**
-   * Start the bot
-   */
   async start(): Promise<void> {
-    logger.info('╔════════════════════════════════════════╗');
-    logger.info('║     🤖 FundedNext Trading Bot Started ║');
-    logger.info('╚════════════════════════════════════════╝');
-    logger.info('');
-
+    if (this.isRunning) return;
     this.isRunning = true;
 
+    logger.info('🤖 Trading bot starting...');
     try {
-      // Initial setup
       await this.validateSetup();
-
-      // Start main loop
       await this.mainLoop();
     } catch (error) {
-      logger.error('Bot startup failed:', error);
-      this.stop();
+      logger.error('Bot stopped due to fatal error', error);
+      this.isRunning = false;
     }
   }
 
-  /**
-   * Stop the bot
-   */
   stop(): void {
+    if (!this.isRunning) return;
     this.isRunning = false;
-    logger.info('🛑 Bot stopped');
+    if (this.sleepTimer) clearTimeout(this.sleepTimer);
+    this.wake?.();
+    logger.info('🛑 Bot loop stopped');
   }
 
-  /**
-   * Validate initial setup
-   */
+  get running(): boolean {
+    return this.isRunning;
+  }
+
   private async validateSetup(): Promise<void> {
-    logger.info('Step 1: Validating setup...');
-
-    // Check API connections
-    const marketConnected = await marketClient.validateConnection();
-    const claudeConnected = await claudeClient.validateConnection();
-
-    if (!marketConnected) {
-      logger.warn('⚠️ Market data connection failed - using mock data');
-    }
-
-    if (!claudeConnected) {
-      logger.warn('⚠️ Claude API connection failed');
-    }
-
-    logger.info('✅ Setup validation complete');
-    logger.info('');
+    await marketClient.validateConnection();
+    await claudeClient.validateConnection();
+    logger.info(`Mode: ${tradeExecutor.isDryRun ? 'PAPER (DRY_RUN=true)' : 'LIVE'}`);
+    logger.info(
+      `Session: ${String(config.londonOpenHour).padStart(2, '0')}:${String(config.londonOpenMinute).padStart(2, '0')}–` +
+        `${String(config.londonCloseHour).padStart(2, '0')}:${String(config.londonCloseMinute).padStart(2, '0')} ` +
+        `${config.timezone}, Mon–Fri | Cycle every ${config.cycleIntervalSeconds}s`
+    );
   }
 
-  /**
-   * Main bot loop
-   */
   private async mainLoop(): Promise<void> {
-    logger.info('Step 2: Starting main loop');
-    logger.info('');
-
     while (this.isRunning) {
       this.currentCycle++;
-      const cycleStart = Date.now();
+      const started = Date.now();
 
       try {
-        // Check if within trading hours
-        if (!this.isWithinTradingHours()) {
-          await this.sleep(60000); // Check every minute
-          continue;
+        const inSession = isWithinTradingSession();
+        this.logSessionChange(inSession);
+
+        if (inSession) {
+          await this.monitorPositions();
+          await this.scanAllPairs();
+          this.logCycleStats(Date.now() - started);
+        } else if (tradeMonitor.getOpenTrades().length > 0) {
+          await this.closeAllPositions('Session ended');
         }
-
-        logger.info(`📍 Cycle #${this.currentCycle} started`);
-
-        // Scan all trading pairs
-        await this.scanAllPairs();
-
-        // Monitor open positions
-        await this.monitorPositions();
-
-        // Log cycle stats
-        this.logCycleStats(Date.now() - cycleStart);
       } catch (error) {
-        logger.error('Error in main loop:', error);
+        logger.error('Error in main loop', error);
       }
 
-      // Wait before next cycle (5 seconds)
-      await this.sleep(5000);
+      await this.sleep(config.cycleIntervalSeconds * 1000);
     }
   }
 
-  /**
-   * Check if within London trading hours (IST: 1:30 PM - 5:00 PM)
-   */
-  private isWithinTradingHours(): boolean {
-    const now = new Date();
-    const hours = now.getHours();
-    const minutes = now.getMinutes();
-    const time = hours * 60 + minutes;
-
-    const openTime = config.londonOpenHour * 60 + config.londonOpenMinute; // 13:30 = 810
-    const closeTime = config.londonCloseHour * 60 + config.londonCloseMinute; // 17:00 = 1020
-
-    const withinHours = time >= openTime && time <= closeTime;
-
-    if (!withinHours && this.currentCycle % 60 === 0) {
-      // Log every hour outside trading hours
-      logger.debug(`⏰ Outside trading hours (${hours}:${minutes < 10 ? '0' : ''}${minutes})`);
+  private logSessionChange(inSession: boolean): void {
+    if (this.lastSessionState === inSession) return;
+    this.lastSessionState = inSession;
+    const now = formatClock(getZonedTime());
+    if (inSession) {
+      logger.info(`📈 London session OPEN (${now} ${config.timezone}) — scanning ${PAIR_LIST.join(', ')}`);
+    } else {
+      logger.info(`⏸️ Outside trading session (${now} ${config.timezone}) — waiting`);
     }
-
-    return withinHours;
   }
 
-  /**
-   * Scan all trading pairs for signals
-   */
   private async scanAllPairs(): Promise<void> {
     for (const pair of PAIR_LIST) {
+      if (!this.isRunning) return;
       try {
         await this.scanPair(pair);
       } catch (error) {
-        logger.error(`Error scanning ${pair}:`, error);
+        logger.error(`Error scanning ${pair}`, error);
       }
-
-      // Small delay between pairs
-      await this.sleep(100);
     }
   }
 
-  /**
-   * Scan individual pair
-   */
   private async scanPair(pair: TradingPair): Promise<void> {
-    try {
-      // Get current price
-      const priceData = await marketClient.getCurrentPrice(pair);
+    if (tradeMonitor.hasOpenTrade(pair)) return;
 
-      // Get candle history
-      const candles = await marketClient.getCandles(pair, '1H', 50);
-
-      // Calculate ATR
-      const atrPips = await marketClient.calculateATR(pair, 14);
-
-      // Get yesterday's high/low (use last candle's high/low as proxy)
-      const yesterdayCandle = candles[candles.length - 2];
-      const yesterdayHigh = yesterdayCandle?.high || priceData.bid + 0.005;
-      const yesterdayLow = yesterdayCandle?.low || priceData.bid - 0.005;
-
-      // Generate signal
-      const signal = EntrySignalGenerator.generateTradeSignal(
-        pair,
-        priceData,
-        yesterdayHigh,
-        yesterdayLow,
-        candles,
-        atrPips
-      );
-
-      // Check risk limits
-      const riskCheck = riskManager.canPlaceTrade();
-      if (!riskCheck.allowed) {
-        logger.info(`⛔ Trade blocked: ${riskCheck.reason}`);
-        return;
-      }
-
-      // Execute if signal is BUY or SELL
-      if (signal.signal !== 'SKIP') {
-        logger.info(
-          `🎯 Signal found: ${signal.signal} ${pair} @ ${signal.entryPrice} (confidence: ${signal.confidence})`
-        );
-
-        const result = await tradeExecutor.executeTrade(signal);
-
-        if (result.success) {
-          logger.info(`✅ Trade executed: ${result.message}`);
-
-          // Record in risk manager
-          riskManager.recordTrade(0); // Assuming 0 initial PnL
-        } else {
-          logger.warn(`❌ Trade execution failed: ${result.message}`);
-        }
-      }
-    } catch (error) {
-      logger.error(`Error scanning pair ${pair}:`, error);
-    }
-  }
-
-  /**
-   * Monitor open positions
-   */
-  private async monitorPositions(): Promise<void> {
-    const openTrades = tradeMonitor.getOpenTrades();
-
-    if (openTrades.length === 0) {
+    const risk = riskManager.canPlaceTrade(tradeMonitor.calculateTotalPnL());
+    if (!risk.allowed) {
+      logger.debug(`Trade blocked: ${risk.reason}`);
       return;
     }
 
-    logger.info(`👁️ Monitoring ${openTrades.length} open position(s)`);
+    const price = await marketClient.getCurrentPrice(pair);
+    const candles = await marketClient.getCandles(pair, '1H', 50);
+    if (candles.length < MIN_CANDLES) {
+      logger.debug(`Not enough candles for ${pair} (${candles.length})`);
+      return;
+    }
 
-    for (const trade of openTrades) {
+    // Previous 24 completed 1H candles = "yesterday's" range
+    const range = candles.slice(-25, -1);
+    const prevHigh = Math.max(...range.map((c) => c.high));
+    const prevLow = Math.min(...range.map((c) => c.low));
+    const atrPips = await marketClient.calculateATR(pair, 14);
+
+    const signal = EntrySignalGenerator.generateTradeSignal(pair, price, prevHigh, prevLow, candles, atrPips);
+    if (signal.signal === 'SKIP') return;
+
+    const result = await tradeExecutor.executeTrade(signal);
+    if (!result.success || !result.tradeId || !result.quantity || result.executedPrice === undefined) {
+      logger.warn(`Trade not opened for ${pair}: ${result.error ?? result.message}`);
+      return;
+    }
+
+    tradeMonitor.registerTrade({
+      tradeId: result.tradeId,
+      pair,
+      type: signal.signal === 'BUY' ? 'BUY' : 'SELL',
+      entryPrice: result.executedPrice,
+      currentPrice: result.executedPrice,
+      quantity: result.quantity,
+      stopLoss: signal.stopLoss,
+      takeProfit: signal.takeProfit,
+      pnl: 0,
+      pnlPercent: 0,
+      openedAt: result.executedAt ?? new Date(),
+    });
+    riskManager.recordTradeOpened();
+  }
+
+  private async monitorPositions(): Promise<void> {
+    for (const trade of tradeMonitor.getOpenTrades()) {
       try {
-        // Get current price
-        const priceData = await marketClient.getCurrentPrice(
-          trade.pair as TradingPair
-        );
-
-        // Update trade price
-        tradeMonitor.updateTradePrice(trade.tradeId, priceData.bid);
-
-        // Check daily loss limit
-        if (tradeMonitor.calculateTotalPnL() <= -config.maxDailyLoss) {
-          logger.error('❌ DAILY LOSS LIMIT HIT! Closing all positions.');
-          await this.closeAllPositions('Daily loss limit reached');
-          riskManager.resetDaily();
-          break;
-        }
-
-        // Check safety buffer
-        const safetyStatus = tradeMonitor.getSafetyBufferStatus(
-          config.safetyBuffer
-        );
-        if (safetyStatus.hit) {
-          logger.warn(`⚠️ Safety buffer hit. Current loss: $${safetyStatus.currentLoss}`);
+        const quote = await marketClient.getCurrentPrice(trade.pair);
+        const exit = tradeMonitor.updateTradePrice(trade.tradeId, quote);
+        if (exit) {
+          await this.closeAtLevel(trade, exit);
         }
       } catch (error) {
-        logger.error(`Error monitoring trade ${trade.tradeId}:`, error);
+        logger.error(`Error monitoring ${trade.tradeId}`, error);
       }
+    }
 
-      await this.sleep(100);
+    const total = riskManager.getStatus().dailyLossAmount + tradeMonitor.calculateTotalPnL();
+    if (total <= -config.maxDailyLoss && tradeMonitor.getOpenTrades().length > 0) {
+      logger.error(`❌ DAILY LOSS LIMIT HIT ($${total.toFixed(2)}). Closing all positions.`);
+      await this.closeAllPositions('Daily loss limit reached');
     }
   }
 
-  /**
-   * Close all open positions
-   */
-  private async closeAllPositions(reason: string): Promise<void> {
-    const openTrades = tradeMonitor.getOpenTrades();
+  /** Close at the SL/TP level that was hit */
+  private async closeAtLevel(trade: OpenTrade, reason: ExitReason): Promise<void> {
+    const closePrice = reason === 'STOP_LOSS' ? trade.stopLoss : trade.takeProfit;
+    const pnl = Calculator.calculatePnL(trade.entryPrice, closePrice, trade.quantity, trade.type);
+    logger.info(`${reason === 'TAKE_PROFIT' ? '🎉 TP' : '⛔ SL'} hit on ${trade.pair}`);
+    await this.closePosition(trade, closePrice, pnl, reason);
+  }
 
-    logger.warn(`🔴 Force closing ${openTrades.length} position(s): ${reason}`);
+  private async closePosition(trade: OpenTrade, closePrice: number, pnl: number, reason: string): Promise<void> {
+    const result = await tradeExecutor.closeTrade(trade.tradeId, closePrice, reason);
+    if (!result.success) {
+      logger.error(`Failed to close ${trade.tradeId}: ${result.message}`);
+      return;
+    }
+    tradeMonitor.removeTrade(trade.tradeId);
+    riskManager.recordTradeClosed(pnl);
+  }
 
-    for (const trade of openTrades) {
-      try {
-        await tradeExecutor.closeTrade(
-          trade.tradeId,
-          trade.currentPrice,
-          reason
-        );
-        tradeMonitor.removeTrade(trade.tradeId);
-      } catch (error) {
-        logger.error(`Error closing trade ${trade.tradeId}:`, error);
+  /** Close every open position at the current market price */
+  async closeAllPositions(reason: string): Promise<void> {
+    if (this.closing) return;
+    this.closing = true;
+    try {
+      const open = tradeMonitor.getOpenTrades();
+      if (open.length === 0) return;
+      logger.warn(`🔴 Closing ${open.length} position(s): ${reason}`);
+
+      for (const trade of open) {
+        try {
+          const quote = await marketClient.getCurrentPrice(trade.pair);
+          tradeMonitor.updateTradePrice(trade.tradeId, quote);
+          await this.closePosition(trade, trade.currentPrice, trade.pnl, reason);
+        } catch (error) {
+          logger.error(`Error closing ${trade.tradeId}`, error);
+        }
       }
+    } finally {
+      this.closing = false;
     }
   }
 
-  /**
-   * Log cycle statistics
-   */
   private logCycleStats(durationMs: number): void {
+    if (this.currentCycle % 10 !== 0) return;
     const stats = tradeMonitor.getStatistics();
-    const riskStatus = riskManager.getStatus();
-
-    if (this.currentCycle % 10 === 0) {
-      // Log every 10 cycles
-      logger.info(`📊 Cycle #${this.currentCycle} complete (${durationMs}ms)`);
-      logger.info(`   Positions: ${stats.openTrades} | P&L: $${stats.totalPnL.toFixed(2)}`);
-      logger.info(
-        `   Trades: ${riskStatus.tradesExecuted}/${config.maxTradesPerDay} | Loss: $${Math.abs(riskStatus.dailyLossAmount).toFixed(2)}/${config.maxDailyLoss}`
-      );
-    }
+    const risk = riskManager.getStatus();
+    logger.info(
+      `📊 Cycle #${this.currentCycle} (${durationMs}ms) | Open ${stats.openTrades} | ` +
+        `Unrealized $${stats.totalPnL.toFixed(2)} | Realized $${risk.dailyLossAmount.toFixed(2)} | ` +
+        `Trades ${risk.tradesExecuted}/${config.maxTradesPerDay}`
+    );
   }
 
-  /**
-   * Sleep utility
-   */
   private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise((resolve) => {
+      this.wake = () => {
+        this.wake = null;
+        this.sleepTimer = null;
+        resolve();
+      };
+      this.sleepTimer = setTimeout(() => this.wake?.(), ms);
+    });
   }
 }
 
-// Export singleton
 export const bot = new TradingBot();

@@ -17,7 +17,7 @@ export interface ClaudeTradeDecision {
 export class ClaudeClient {
   private client: AxiosInstance;
   private apiKey: string;
-  private model = 'claude-3-5-sonnet-20241022';
+  private model = config.claudeModel;
   private baseURL = 'https://api.anthropic.com/v1';
 
   constructor(apiKey: string) {
@@ -112,11 +112,19 @@ Respond in JSON format with: decision (BUY/SELL/SKIP), reasoning, confidence (0-
     }
   }
 
+  isConfigured(): boolean {
+    return !!this.apiKey && !this.apiKey.includes('your_');
+  }
+
   async validateConnection(): Promise<boolean> {
+    if (!this.isConfigured()) {
+      logger.warn('⚠️ CLAUDE_API_KEY not set — AI review disabled (bot still trades on strategy rules)');
+      return false;
+    }
     try {
       const response = await this.client.post('/messages', {
         model: this.model,
-        max_tokens: 50,
+        max_tokens: 10,
         messages: [
           {
             role: 'user',

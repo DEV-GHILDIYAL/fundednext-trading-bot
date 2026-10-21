@@ -146,6 +146,9 @@ export class PriceActionAnalyzer {
    * Generate composite price action signal
    */
   static generateSignal(candles: CandleData[], atrPips: number): PriceActionSignal {
+    if (candles.length < 2) {
+      return { pattern: 'INSUFFICIENT_DATA', direction: 'NEUTRAL', strength: 0, confidence: 0, description: 'Not enough candles' };
+    }
     const trend = this.analyzeTrend(candles);
     const lastCandle = candles[candles.length - 1];
     const previousCandle = candles[candles.length - 2];
@@ -153,7 +156,6 @@ export class PriceActionAnalyzer {
     const isPinBar = this.detectPinBar(lastCandle);
     const engulfing = this.detectEngulfing(previousCandle, lastCandle);
     const isInsideBar = this.detectInsideBar(previousCandle, lastCandle);
-    const momentum = this.calculateMomentum(candles);
     const volatility = this.analyzeVolatility(candles);
 
     let signal: PriceActionSignal;
@@ -208,7 +210,7 @@ export class PriceActionAnalyzer {
       };
     }
 
-    logger.info('Price action signal generated', {
+    logger.debug('Price action signal generated', {
       pattern: signal.pattern,
       direction: signal.direction,
       strength: signal.strength,

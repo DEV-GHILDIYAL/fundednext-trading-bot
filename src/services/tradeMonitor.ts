@@ -1,161 +1,85 @@
 import { logger } from '../utils/logger';
+import { config } from '../config';
+import { Calculator } from '../utils/calculator';
 
 export interface OpenTrade {
   tradeId: string;
   pair: string;
   type: 'BUY' | 'SELL';
   entryPrice: number;
+  /** Price the position would close at right now (bid for BUY, ask for SELL) */
   currentPrice: number;
+  /** Position size in units */
   quantity: number;
   stopLoss: number;
   takeProfit: number;
+  /** Unrealized P&L in USD */
   pnl: number;
+  /** P&L as % of the risked amount */
   pnlPercent: number;
   openedAt: Date;
 }
 
-export interface TradeMonitorConfig {
-  checkIntervalMs: number;
-  alertOnPips: number;
-}
+export type ExitReason = 'STOP_LOSS' | 'TAKE_PROFIT';
 
 export class TradeMonitor {
   private openTrades: Map<string, OpenTrade> = new Map();
-  private config: TradeMonitorConfig;
 
-  constructor(config: Partial<TradeMonitorConfig> = {}) {
-    this.config = {
-      checkIntervalMs: 1000, // Check every second
-      alertOnPips: 10, // Alert every 10 pips move
-      ...config,
-    };
-  }
-
-  /**
-   * Register open trade for monitoring
-   */
   registerTrade(trade: OpenTrade): void {
     this.openTrades.set(trade.tradeId, trade);
-    logger.info(`📌 Trade registered for monitoring: ${trade.tradeId}`);
+    logger.info(`📌 Monitoring ${trade.type} ${trade.pair} (${trade.tradeId})`);
   }
 
   /**
-   * Update current price for a trade
+   * Update a trade with the latest quote. Returns the exit reason if SL/TP was hit.
    */
-  updateTradePrice(tradeId: string, currentPrice: number): void {
+  updateTradePrice(tradeId: string, quote: { bid: number; ask: number }): ExitReason | null {
     const trade = this.openTrades.get(tradeId);
     if (!trade) {
       logger.warn(`Trade not found: ${tradeId}`);
-      return;
+      return null;
     }
 
-    const oldPnL = trade.pnl;
-    trade.currentPrice = currentPrice;
+    trade.currentPrice = trade.type === 'BUY' ? quote.bid : quote.ask;
+    trade.pnl = Calculator.calculatePnL(trade.entryPrice, trade.currentPrice, trade.quantity, trade.type);
+    trade.pnlPercent = parseFloat(((trade.pnl / config.riskPerTrade) * 100).toFixed(1));
 
-    // Calculate new P&L
-    if (trade.type === 'BUY') {
-      trade.pnl = (currentPrice - trade.entryPrice) * trade.quantity * 10000;
-    } else {
-      trade.pnl = (trade.entryPrice - currentPrice) * trade.quantity * 10000;
-    }
-
-    trade.pnlPercent = (trade.pnl / 30) * 100; // Risk was $30
-
-    // Check for SL/TP hit
-    this.checkExitConditions(trade);
-
-    // Log significant moves
-    const pnlChange = Math.abs(trade.pnl - oldPnL);
-    if (pnlChange > 10) {
-      logger.info(`💰 ${trade.tradeId}: P&L ${trade.pnl.toFixed(2)} | ${trade.pnlPercent.toFixed(1)}%`);
-    }
+    return this.checkExit(trade);
   }
 
-  /**
-   * Check if trade should exit (SL/TP hit)
-   */
-  private checkExitConditions(trade: OpenTrade): void {
-    const slHit = 
-      trade.type === 'BUY'
-        ? trade.currentPrice <= trade.stopLoss
-        : trade.currentPrice >= trade.stopLoss;
+  checkExit(trade: OpenTrade): ExitReason | null {
+    const slHit = trade.type === 'BUY' ? trade.currentPrice <= trade.stopLoss : trade.currentPrice >= trade.stopLoss;
+    if (slHit) return 'STOP_LOSS';
 
-    const tpHit =
-      trade.type === 'BUY'
-        ? trade.currentPrice >= trade.takeProfit
-        : trade.currentPrice <= trade.takeProfit;
+    const tpHit = trade.type === 'BUY' ? trade.currentPrice >= trade.takeProfit : trade.currentPrice <= trade.takeProfit;
+    if (tpHit) return 'TAKE_PROFIT';
 
-    if (slHit) {
-      logger.warn(`⛔ SL HIT: ${trade.tradeId} - Loss: $${trade.pnl.toFixed(2)}`);
-      // Signal to close at SL
-    }
-
-    if (tpHit) {
-      logger.info(`✅ TP HIT: ${trade.tradeId} - Profit: $${trade.pnl.toFixed(2)}`);
-      // Signal to close at TP
-    }
+    return null;
   }
 
-  /**
-   * Get trade status
-   */
   getTradeStatus(tradeId: string): OpenTrade | null {
-    return this.openTrades.get(tradeId) || null;
+    return this.openTrades.get(tradeId) ?? null;
   }
 
-  /**
-   * Get all open trades
-   */
   getOpenTrades(): OpenTrade[] {
     return Array.from(this.openTrades.values());
   }
 
-  /**
-   * Remove trade (when closed)
-   */
+  hasOpenTrade(pair: string): boolean {
+    return this.getOpenTrades().some((t) => t.pair === pair);
+  }
+
   removeTrade(tradeId: string): void {
     this.openTrades.delete(tradeId);
-    logger.info(`🗑️ Trade removed: ${tradeId}`);
   }
 
-  /**
-   * Calculate total P&L
-   */
+  /** Total unrealized P&L of open trades */
   calculateTotalPnL(): number {
-    let totalPnL = 0;
-    for (const trade of this.openTrades.values()) {
-      totalPnL += trade.pnl;
-    }
-    return totalPnL;
+    let total = 0;
+    for (const trade of this.openTrades.values()) total += trade.pnl;
+    return parseFloat(total.toFixed(2));
   }
 
-  /**
-   * Check if daily loss limit reached
-   */
-  isDailyLossLimitHit(maxDailyLoss: number = 100): boolean {
-    const totalPnL = this.calculateTotalPnL();
-    return totalPnL <= -maxDailyLoss;
-  }
-
-  /**
-   * Get safety buffer status
-   */
-  getSafetyBufferStatus(safetyBuffer: number = 70): {
-    hit: boolean;
-    currentLoss: number;
-    buffer: number;
-  } {
-    const totalPnL = this.calculateTotalPnL();
-    return {
-      hit: totalPnL <= -safetyBuffer,
-      currentLoss: Math.abs(totalPnL),
-      buffer: safetyBuffer,
-    };
-  }
-
-  /**
-   * Get trade statistics
-   */
   getStatistics(): {
     openTrades: number;
     totalPnL: number;
@@ -164,20 +88,15 @@ export class TradeMonitor {
     averagePnL: number;
   } {
     const trades = this.getOpenTrades();
-    const winningTrades = trades.filter((t) => t.pnl > 0).length;
-    const losingTrades = trades.filter((t) => t.pnl < 0).length;
     const totalPnL = this.calculateTotalPnL();
-    const averagePnL = trades.length > 0 ? totalPnL / trades.length : 0;
-
     return {
       openTrades: trades.length,
       totalPnL,
-      winningTrades,
-      losingTrades,
-      averagePnL,
+      winningTrades: trades.filter((t) => t.pnl > 0).length,
+      losingTrades: trades.filter((t) => t.pnl < 0).length,
+      averagePnL: trades.length > 0 ? totalPnL / trades.length : 0,
     };
   }
 }
 
-// Export singleton
 export const tradeMonitor = new TradeMonitor();
