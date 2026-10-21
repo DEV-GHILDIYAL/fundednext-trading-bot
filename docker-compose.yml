@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fundednext-bot
+    restart: unless-stopped
+    
+    environment:
+      NODE_ENV: production
+      BOT_ENABLED: "false"
+      DRY_RUN: "true"
+      LOG_LEVEL: info
+      LOG_DIR: ./logs
+      
+    volumes:
+      # Persistent volumes
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+      
+    ports:
+      - "3000:3000"  # For future API
+      
+    networks:
+      - trading
+      
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+networks:
+  trading:
+    driver: bridge
+
+volumes:
+  logs:
+  data:
