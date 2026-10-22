@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0e13">
 <title>FundedNext Bot</title>
 <style>
   :root {
@@ -21,28 +22,48 @@
     --blue: #4c8dff;
     --blue-bg: rgba(76, 141, 255, .12);
     --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --pad: 16px;
+    --gap: 12px;
+    --radius: 12px;
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   html, body { margin: 0; background: var(--bg); color: var(--text); }
-  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  body {
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: var(--pad); }
   .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .pos { color: var(--green); } .neg { color: var(--red); } .muted { color: var(--muted); }
 
-  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-  .brand { display: flex; align-items: center; gap: 10px; }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px 16px;
+    margin-bottom: 14px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
   .brand h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
-  .logo { width: 28px; height: 28px; border-radius: 7px; background: linear-gradient(135deg, var(--blue), var(--green)); }
-  .badges { display: flex; flex-wrap: wrap; gap: 6px; }
-  .badge { font-size: 11px; font-weight: 600; letter-spacing: .5px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
+  .logo { width: 28px; height: 28px; border-radius: 7px; background: linear-gradient(135deg, var(--blue), var(--green)); flex: none; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .badge {
+    font-size: 11px; font-weight: 600; letter-spacing: .5px;
+    padding: 4px 8px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+    white-space: nowrap;
+  }
   .badge.green { color: var(--green); background: var(--green-bg); border-color: transparent; }
   .badge.red { color: var(--red); background: var(--red-bg); border-color: transparent; }
   .badge.amber { color: var(--amber); background: var(--amber-bg); border-color: transparent; }
   .badge.blue { color: var(--blue); background: var(--blue-bg); border-color: transparent; }
-  .clock { text-align: right; }
+  .clock { text-align: right; flex: 0 0 auto; }
   .clock .t { font-size: 20px; font-weight: 600; }
   .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.ok { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
   .dot.bad { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
 
@@ -60,36 +81,46 @@
     70% { box-shadow: 0 0 0 9px rgba(34,197,94,0); }
     100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
   }
-  .h2right { display: inline-flex; align-items: center; gap: 10px; }
+  .h2right { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
   .scanline { height: 3px; border-radius: 999px; background: var(--panel-2); margin: 10px 0 6px; overflow: hidden; }
   .scanline .bar { height: 100%; width: 0; background: var(--green); border-radius: 999px; transition: width .2s linear; }
   .scanline.idle .bar { background: var(--border); }
-  .scanmeta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+  .scanmeta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
   .scanmeta .num { color: var(--muted); }
-  #spark { width: 100%; height: 56px; display: block; margin-top: 8px; }
+  #spark { width: 100%; height: 64px; display: block; margin-top: 8px; }
   .card.scanning { box-shadow: 0 0 0 1px rgba(34,197,94,.3), 0 0 26px -14px rgba(34,197,94,.6); }
   td.flash-up { animation: flashUp .9s ease-out; }
   td.flash-down { animation: flashDown .9s ease-out; }
   @keyframes flashUp { 0% { background: rgba(34,197,94,.3); } 100% { background: transparent; } }
   @keyframes flashDown { 0% { background: rgba(240,82,82,.3); } 100% { background: transparent; } }
 
-  .notice { padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(245,165,36,.25); }
+  .notice {
+    padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px;
+    background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(245,165,36,.25);
+  }
   .notice.hidden { display: none; }
 
-  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; min-width: 0; }
-  .card h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .kpi .v { font-size: 26px; font-weight: 600; }
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; min-width: 0; }
+  .card h2 {
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); margin: 0 0 10px;
+    display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .kpi .v { font-size: clamp(21px, 2.2vw, 26px); font-weight: 600; line-height: 1.2; }
   .kpi .s { font-size: 12px; color: var(--muted); margin-top: 4px; }
   .meter { position: relative; height: 8px; background: var(--panel-2); border-radius: 999px; margin-top: 12px; overflow: visible; }
   .meter .fill { height: 100%; border-radius: 999px; background: var(--green); width: 0; transition: width .4s; }
   .meter .mark { position: absolute; top: -4px; width: 2px; height: 16px; background: var(--amber); }
 
-  .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 12px; }
-  .full { margin-bottom: 12px; }
-  .table-wrap { overflow-x: auto; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: var(--gap); margin-bottom: var(--gap); }
+  .full { margin-bottom: var(--gap); }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th {
+    text-align: left; font-weight: 500; color: var(--muted); font-size: 12px;
+    padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
   td { padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
   td.r, th.r { text-align: right; }
@@ -98,6 +129,9 @@
   .side.SELL { color: var(--red); background: var(--red-bg); }
   .status { color: var(--muted); white-space: normal; min-width: 160px; }
   .empty { color: var(--muted); text-align: center; padding: 22px 8px; }
+  @media (hover: hover) {
+    tbody tr:hover td { background: rgba(255,255,255,.025); }
+  }
 
   #equity { width: 100%; height: 200px; display: block; }
   .log { font-family: var(--mono); font-size: 12px; max-height: 320px; overflow-y: auto; }
@@ -106,13 +140,47 @@
   .log .msg { overflow-wrap: anywhere; }
   footer { color: var(--muted); font-size: 12px; text-align: center; padding: 8px 0 20px; }
 
-  @media (max-width: 960px) {
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  /* --- tablet --- */
+  @media (max-width: 1040px) {
     .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .grid { grid-template-columns: 1fr; }
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .brand h1 { font-size: 17px; }
   }
-  @media (max-width: 520px) {
-    .kpis { grid-template-columns: 1fr; }
-    .clock { text-align: left; }
+
+  /* --- phone --- */
+  @media (max-width: 720px) {
+    :root { --pad: 12px; --gap: 10px; --radius: 11px; }
+    .brand { gap: 8px; }
+    .brand h1 { font-size: 16px; }
+    .logo { width: 24px; height: 24px; }
+    .badges { gap: 5px; margin-top: 5px; }
+    .badge { font-size: 10px; padding: 3px 7px; letter-spacing: .3px; }
+    .clock .t { font-size: 17px; }
+    .conn { font-size: 11px; }
+    .card { padding: 12px; }
+    .card h2 { font-size: 11px; margin-bottom: 8px; }
+    .notice { font-size: 12px; padding: 9px 10px; }
+    table { font-size: 12px; }
+    th { font-size: 11px; padding: 6px; }
+    td { padding: 7px 6px; }
+    .status { min-width: 0; white-space: normal; }
+    th.opt, td.opt { display: none; }
+    .kpi .v { font-size: 20px; }
+    .kpi .s { font-size: 11px; }
+    #equity { height: 160px; }
+    #spark { height: 56px; }
+    .log { font-size: 11px; max-height: 260px; }
+    .log div { grid-template-columns: 56px 40px 1fr; gap: 6px; }
+    .scanmeta { font-size: 10px; }
+    footer { font-size: 11px; }
+  }
+
+  /* --- small phones --- */
+  @media (max-width: 400px) {
+    .kpis { grid-template-columns: minmax(0, 1fr); }
+    .brand h1 { font-size: 15px; }
   }
 </style>
 </head>
@@ -168,17 +236,17 @@
       </h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Pair</th><th class="r">Bid</th><th class="r">Ask</th><th class="r">Spread</th><th class="r">Prev high</th><th class="r">Prev low</th><th class="r">ATR</th><th>Status</th></tr></thead>
+          <thead><tr><th>Pair</th><th class="r">Bid</th><th class="r">Ask</th><th class="r opt">Spread</th><th class="r opt">Prev high</th><th class="r opt">Prev low</th><th class="r opt">ATR</th><th>Status</th></tr></thead>
           <tbody id="market"></tbody>
         </table>
       </div>
       <div class="scanline" id="scanLine"><div class="bar" id="scanFill"></div></div>
       <div class="scanmeta"><span id="scanState">—</span><span class="num" id="scanCycle"></span></div>
-      <svg id="spark" viewBox="0 0 300 56" preserveAspectRatio="none" role="img" aria-label="Recent bid movement"></svg>
+      <svg id="spark" viewBox="0 0 300 56" role="img" aria-label="Recent bid movement"></svg>
     </div>
     <div class="card">
       <h2>Equity curve <span class="muted">realized P&amp;L</span></h2>
-      <svg id="equity" viewBox="0 0 600 200" preserveAspectRatio="none" role="img" aria-label="Equity curve"></svg>
+      <svg id="equity" viewBox="0 0 600 200" role="img" aria-label="Equity curve"></svg>
     </div>
   </section>
 
@@ -186,7 +254,7 @@
     <h2>Open positions <span class="num" id="openCount"></span></h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Pair</th><th>Side</th><th class="r">Entry</th><th class="r">Current</th><th class="r">Stop loss</th><th class="r">Take profit</th><th class="r">Lots</th><th class="r">P&amp;L</th><th class="r">Opened</th></tr></thead>
+        <thead><tr><th>Pair</th><th>Side</th><th class="r">Entry</th><th class="r">Current</th><th class="r opt">Stop loss</th><th class="r opt">Take profit</th><th class="r opt">Lots</th><th class="r">P&amp;L</th><th class="r opt">Opened</th></tr></thead>
         <tbody id="open"></tbody>
       </table>
     </div>
@@ -197,7 +265,7 @@
       <h2>Trade history <span class="muted">last 50</span></h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Closed</th><th>Pair</th><th>Side</th><th class="r">Entry</th><th class="r">Exit</th><th>Reason</th><th class="r">P&amp;L</th></tr></thead>
+          <thead><tr><th>Closed</th><th>Pair</th><th>Side</th><th class="r opt">Entry</th><th class="r opt">Exit</th><th class="opt">Reason</th><th class="r">P&amp;L</th></tr></thead>
           <tbody id="history"></tbody>
         </table>
       </div>
@@ -310,10 +378,10 @@
       return '<tr><td><b>' + esc(p.pair) + '</b></td>' +
         '<td class="r num' + flash + '">' + px(p.pair, p.bid) + '</td>' +
         '<td class="r num">' + px(p.pair, p.ask) + '</td>' +
-        '<td class="r num">' + (p.spreadPips ?? '—') + '</td>' +
-        '<td class="r num">' + px(p.pair, p.prevHigh) + '</td>' +
-        '<td class="r num">' + px(p.pair, p.prevLow) + '</td>' +
-        '<td class="r num">' + (p.atrPips ?? '—') + '</td>' +
+        '<td class="r num opt">' + (p.spreadPips ?? '—') + '</td>' +
+        '<td class="r num opt">' + px(p.pair, p.prevHigh) + '</td>' +
+        '<td class="r num opt">' + px(p.pair, p.prevLow) + '</td>' +
+        '<td class="r num opt">' + (p.atrPips ?? '—') + '</td>' +
         '<td class="status">' + esc(p.status) + '</td></tr>';
     }).join('');
 
@@ -333,11 +401,11 @@
       '<td><span class="side ' + esc(t.type) + '">' + esc(t.type) + '</span></td>' +
       '<td class="r num">' + px(t.pair, t.entryPrice) + '</td>' +
       '<td class="r num">' + px(t.pair, t.currentPrice) + '</td>' +
-      '<td class="r num">' + px(t.pair, t.stopLoss) + '</td>' +
-      '<td class="r num">' + px(t.pair, t.takeProfit) + '</td>' +
-      '<td class="r num">' + Number(t.lots).toFixed(2) + '</td>' +
+      '<td class="r num opt">' + px(t.pair, t.stopLoss) + '</td>' +
+      '<td class="r num opt">' + px(t.pair, t.takeProfit) + '</td>' +
+      '<td class="r num opt">' + Number(t.lots).toFixed(2) + '</td>' +
       '<td class="r num ' + cls(t.pnl) + '">' + money(t.pnl) + '</td>' +
-      '<td class="r num">' + time(t.openedAt) + '</td></tr>'
+      '<td class="r num opt">' + time(t.openedAt) + '</td></tr>'
     ).join('') : '<tr><td colspan="9" class="empty">No open positions</td></tr>';
 
     // History
@@ -345,9 +413,9 @@
       '<tr><td class="num">' + dateTime(t.closedAt) + '</td>' +
       '<td><b>' + esc(t.pair) + '</b></td>' +
       '<td><span class="side ' + esc(t.type) + '">' + esc(t.type) + '</span></td>' +
-      '<td class="r num">' + px(t.pair, t.entryPrice) + '</td>' +
-      '<td class="r num">' + px(t.pair, t.exitPrice) + '</td>' +
-      '<td class="muted">' + esc(String(t.reason).replace(/_/g, ' ').toLowerCase()) + '</td>' +
+      '<td class="r num opt">' + px(t.pair, t.entryPrice) + '</td>' +
+      '<td class="r num opt">' + px(t.pair, t.exitPrice) + '</td>' +
+      '<td class="muted opt">' + esc(String(t.reason).replace(/_/g, ' ').toLowerCase()) + '</td>' +
       '<td class="r num ' + cls(t.pnl) + '">' + money(t.pnl) + '</td></tr>'
     ).join('') : '<tr><td colspan="7" class="empty">No closed trades yet</td></tr>';
 
@@ -363,9 +431,13 @@
 
   function renderEquity(points) {
     const svg = $('equity');
-    const W = 600, H = 200, P = 14;
+    const box = svg.getBoundingClientRect();
+    const W = Math.max(220, Math.round(box.width) || 600);
+    const H = Math.max(120, Math.round(box.height) || 200);
+    const P = 14;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     if (!points.length) {
-      svg.innerHTML = '<text x="300" y="104" text-anchor="middle" fill="#8593a3" font-size="13">No closed trades yet</text>';
+      svg.innerHTML = '<text x="' + (W / 2) + '" y="' + (H / 2 + 4) + '" text-anchor="middle" fill="#8593a3" font-size="13">No closed trades yet</text>';
       return;
     }
     const values = [0].concat(points.map((p) => p.equity));
@@ -386,12 +458,16 @@
 
   function renderSpark(pair, isActive) {
     const svg = $('spark');
+    const box = svg.getBoundingClientRect();
+    const W = Math.max(160, Math.round(box.width) || 300);
+    const H = Math.max(40, Math.round(box.height) || 56);
+    const P = 4;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     if (spark.length < 2) {
-      svg.innerHTML = '<text x="150" y="33" text-anchor="middle" fill="#8593a3" font-size="10">' +
+      svg.innerHTML = '<text x="' + (W / 2) + '" y="' + (H / 2 + 3) + '" text-anchor="middle" fill="#8593a3" font-size="10">' +
         (isActive ? 'collecting ticks…' : 'no live ticks — bot is idle') + '</text>';
       return;
     }
-    const W = 300, H = 56, P = 4;
     const min = Math.min(...spark), max = Math.max(...spark);
     const span = max - min || 0.0001;
     const x = (i) => P + (i / (spark.length - 1)) * (W - 2 * P);
