@@ -61,6 +61,13 @@ describe('FundedNext rules', () => {
     expect(config.riskPerTrade).toBeCloseTo(config.accountBalance * 0.0075, 2);
   });
 
+  it('uses the correct Stellar 2-Step target for the configured phase', () => {
+    const expectedTarget = config.challengePhase === 2 ? 5 : 8;
+    expect(config.profitTargetPercent).toBe(expectedTarget);
+    expect(config.targetProfit).toBeCloseTo(config.accountBalance * (expectedTarget / 100), 2);
+    expect(config.minTradingDaysPerPhase).toBe(5);
+  });
+
   it('allows at most 3 trades per day', () => {
     expect(config.maxTradesPerDay).toBe(3);
   });
@@ -101,7 +108,14 @@ describe('RiskManager', () => {
 
   it('blocks after the profit target is reached', () => {
     const rm = new RiskManager();
-    expect(rm.canPlaceTrade(0, config.targetProfit).allowed).toBe(false);
+    expect(rm.canPlaceTrade(0, config.targetProfit, config.minTradingDaysPerPhase).allowed).toBe(false);
+  });
+
+  it('allows one maintenance trade per day when target is hit before min days', () => {
+    const rm = new RiskManager();
+    expect(rm.canPlaceTrade(0, config.targetProfit, 0).allowed).toBe(true);
+    rm.recordTradeOpened();
+    expect(rm.canPlaceTrade(0, config.targetProfit, 0).allowed).toBe(false);
   });
 
   it('blocks after max trades per day', () => {

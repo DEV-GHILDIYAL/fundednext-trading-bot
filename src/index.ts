@@ -49,8 +49,9 @@ async function main(): Promise<void> {
       `1:2 RR | no hedging | min hold ${config.minTradeDurationSeconds}s`
   );
   logger.info(
-    `FundedNext limits: daily loss $${config.maxDailyLoss} (${config.dailyLossPercent}%) | ` +
-      `max loss $${config.maxTotalLoss} (${config.maxLossPercent}%) | target $${config.targetProfit} (${config.profitTargetPercent}%)`
+    `FundedNext Phase ${config.challengePhase}: target $${config.targetProfit} (${config.profitTargetPercent}%) | ` +
+      `min ${config.minTradingDaysPerPhase} trading days | daily loss $${config.maxDailyLoss} (${config.dailyLossPercent}%) | ` +
+      `max loss $${config.maxTotalLoss} (${config.maxLossPercent}%)`
   );
 
   riskManager.restore(tradeJournal.getTodayStats());

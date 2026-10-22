@@ -174,8 +174,8 @@ export class TradeJournal {
     };
   }
 
-  getSummary(): JournalSummary {
-    const pnls = this.closed.map((t) => t.pnl);
+  private summarize(trades: ClosedTrade[]): JournalSummary {
+    const pnls = trades.map((t) => t.pnl);
     const wins = pnls.filter((p) => p > 0).length;
     const losses = pnls.filter((p) => p < 0).length;
     return {
@@ -187,6 +187,35 @@ export class TradeJournal {
       bestTrade: pnls.length ? Math.max(...pnls) : 0,
       worstTrade: pnls.length ? Math.min(...pnls) : 0,
     };
+  }
+
+  getSummary(): JournalSummary {
+    return this.summarize(this.closed);
+  }
+
+  /**
+   * P&L for the current FundedNext challenge phase. Trades are filtered by
+   * opening date so a trade that closes after midnight still belongs to the
+   * day it was placed. Empty `sinceDateKey` means the whole journal.
+   */
+  getPhaseSummary(sinceDateKey: string = config.phaseStartDate): JournalSummary {
+    if (!sinceDateKey) return this.summarize(this.closed);
+    const inPhase = this.closed.filter(
+      (t) => getZonedTime(new Date(t.openedAt)).dateKey >= sinceDateKey
+    );
+    return this.summarize(inPhase);
+  }
+
+  /** Distinct calendar days (bot timezone) with at least one trade in this phase. */
+  getTradingDays(sinceDateKey: string = config.phaseStartDate): number {
+    const days = new Set<string>();
+    const add = (iso: string): void => {
+      const key = getZonedTime(new Date(iso)).dateKey;
+      if (!sinceDateKey || key >= sinceDateKey) days.add(key);
+    };
+    for (const trade of this.closed) add(trade.openedAt);
+    for (const entry of this.openEntries.values()) add(entry.openedAt);
+    return days.size;
   }
 
   /** Cumulative realized P&L after each closed trade (oldest first) */

@@ -101,6 +101,11 @@ export class TradingBot {
         `1:2 RR | no hedging | min hold ${config.minTradeDurationSeconds}s`
     );
     logger.info(
+      `Challenge: Phase ${config.challengePhase} | target ${config.profitTargetPercent}% ($${config.targetProfit}) | ` +
+        `min ${config.minTradingDaysPerPhase} trading days/phase` +
+        (config.phaseStartDate ? ` since ${config.phaseStartDate}` : '')
+    );
+    logger.info(
       `Session: ${String(config.londonOpenHour).padStart(2, '0')}:${String(config.londonOpenMinute).padStart(2, '0')}–` +
         `${String(config.londonCloseHour).padStart(2, '0')}:${String(config.londonCloseMinute).padStart(2, '0')} ` +
         `${config.timezone}, Mon–Fri | Cycle every ${config.cycleIntervalSeconds}s`
@@ -191,7 +196,8 @@ export class TradingBot {
 
     const risk = riskManager.canPlaceTrade(
       tradeMonitor.calculateTotalPnL(),
-      tradeJournal.getSummary().totalPnL
+      tradeJournal.getPhaseSummary().totalPnL,
+      tradeJournal.getTradingDays()
     );
     if (!risk.allowed) {
       this.updatePair(pair, { status: `Blocked: ${risk.reason}` });

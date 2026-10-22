@@ -205,6 +205,8 @@
     $('badges').innerHTML = botBadge +
       badge(d.mode, d.mode === 'LIVE' ? 'red' : 'blue') +
       badge('DATA: ' + d.dataSource, d.dataSource === 'LIVE' ? 'green' : 'amber') +
+      badge('PHASE ' + d.phase.number + ' · ' + d.phase.targetPercent + '% TARGET', 'blue') +
+      badge('DAYS ' + d.phase.tradingDays + '/' + d.phase.minTradingDays, d.phase.tradingDays >= d.phase.minTradingDays ? 'green' : 'amber') +
       badge(d.session.open ? 'SESSION OPEN' : 'SESSION CLOSED', d.session.open ? 'green' : '');
 
     const notice = $('notice');
@@ -222,7 +224,7 @@
     $('kTodaySub').textContent = 'Realized ' + money(realized) + ' · Open ' + money(unreal);
 
     $('kTrades').textContent = d.risk.tradesExecuted + ' / ' + d.limits.maxTradesPerDay;
-    $('kTradesSub').textContent = 'W ' + d.risk.wins + ' · L ' + d.risk.losses + ' · Risk $' + d.limits.riskPerTrade + '/trade';
+    $('kTradesSub').textContent = 'W ' + d.risk.wins + ' · L ' + d.risk.losses + ' · Risk $' + d.limits.riskPerTrade + '/trade · Days ' + d.phase.tradingDays + '/' + d.phase.minTradingDays;
 
     const loss = Math.max(0, -today);
     const pct = Math.min(100, (loss / d.limits.maxDailyLoss) * 100);

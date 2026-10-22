@@ -48,4 +48,19 @@ describe('TradeJournal', () => {
     fs.writeFileSync(path.join(dir, 'trades.jsonl'), 'not json\n');
     expect(() => new TradeJournal(dir)).not.toThrow();
   });
+
+  it('counts distinct trading days and filters phase P&L', () => {
+    const j = new TradeJournal(dir);
+    j.recordOpen(trade('D1', new Date('2026-10-20T08:00:00Z')));
+    j.recordClose('D1', 1.095, -30, 'STOP_LOSS');
+    j.recordOpen(trade('D2', new Date('2026-10-21T08:00:00Z')));
+    j.recordClose('D2', 1.11, 60, 'TAKE_PROFIT');
+    j.recordOpen(trade('D3', new Date('2026-10-21T09:00:00Z')));
+    j.recordClose('D3', 1.11, 30, 'TAKE_PROFIT');
+
+    expect(j.getTradingDays('2026-10-21')).toBe(1);
+    expect(j.getTradingDays('2026-10-20')).toBe(2);
+    expect(j.getPhaseSummary('2026-10-21').totalPnL).toBe(90);
+    expect(j.getPhaseSummary('2026-10-20').totalPnL).toBe(60);
+  });
 });

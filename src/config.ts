@@ -18,8 +18,12 @@ const dailyLossPercent = Math.min(num(process.env.DAILY_LOSS_PERCENT, 5), 5);
 const maxDailyLoss = parseFloat((accountBalance * (dailyLossPercent / 100)).toFixed(2));
 const maxLossPercent = Math.min(num(process.env.MAX_LOSS_PERCENT, 10), 10);
 const maxTotalLoss = parseFloat((accountBalance * (maxLossPercent / 100)).toFixed(2));
-const profitTargetPercent = num(process.env.PROFIT_TARGET_PERCENT, 8);
+const challengePhase = Math.min(Math.max(num(process.env.CHALLENGE_PHASE, 1), 1), 2);
+const defaultTargetPercent = challengePhase === 2 ? 5 : 8;
+const profitTargetPercent = num(process.env.PROFIT_TARGET_PERCENT, defaultTargetPercent);
 const targetProfit = parseFloat((accountBalance * (profitTargetPercent / 100)).toFixed(2));
+const minTradingDaysPerPhase = Math.max(1, num(process.env.MIN_TRADING_DAYS_PER_PHASE, 5));
+const phaseStartDate = (process.env.PHASE_START_DATE || '').trim();
 const safetyBuffer = parseFloat((riskPerTrade * maxTradesPerDay).toFixed(2));
 const minTradeDurationSeconds = Math.max(30, num(process.env.MIN_TRADE_DURATION_SECONDS, 30));
 
@@ -41,8 +45,9 @@ export const config = {
   aiReviewEnabled: process.env.AI_REVIEW_ENABLED === 'true',
   aiMinConfidence: num(process.env.AI_MIN_CONFIDENCE, 0.55),
 
-  // Account Configuration (FundedNext rules)
+  // Account Configuration (FundedNext Stellar 2-Step)
   accountBalance,
+  challengePhase,
   riskPercent,
   riskPerTrade,
   targetProfit,
@@ -52,6 +57,8 @@ export const config = {
   maxTotalLoss,
   maxLossPercent,
   maxTradesPerDay,
+  minTradingDaysPerPhase,
+  phaseStartDate,
   safetyBuffer,
   minTradeDurationSeconds,
 

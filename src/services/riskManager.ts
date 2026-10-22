@@ -18,10 +18,15 @@ export class RiskManager {
 
   /**
    * Can a new trade be opened? Uses realized + unrealized P&L.
-   * `realizedTotalPnL` is the all-time closed P&L (used for the FundedNext
-   * maximum-loss and profit-target rules).
+   * `realizedTotalPnL` is the phase P&L (used for the FundedNext maximum-loss
+   * and profit-target rules). `tradingDays` is the number of distinct trading
+   * days completed in the current phase.
    */
-  canPlaceTrade(unrealizedPnL: number = 0, realizedTotalPnL: number = 0): RiskCheckResult {
+  canPlaceTrade(
+    unrealizedPnL: number = 0,
+    realizedTotalPnL: number = 0,
+    tradingDays: number = 0
+  ): RiskCheckResult {
     const total = this.dailyLossAmount + unrealizedPnL;
     const totalAccountPnL = realizedTotalPnL + unrealizedPnL;
     const remaining = Math.max(0, config.maxDailyLoss + total);
@@ -34,16 +39,37 @@ export class RiskManager {
       return { allowed: false, reason: `Maximum loss limit reached ($${config.maxTotalLoss})`, dailyLossRemaining: remaining, tradesLeftToday: 0 };
     }
 
-    if (totalAccountPnL >= config.targetProfit) {
-      return { allowed: false, reason: `Profit target reached ($${config.targetProfit})`, dailyLossRemaining: remaining, tradesLeftToday: 0 };
-    }
-
     if (this.safetyBufferHit || total <= -config.safetyBuffer) {
       if (!this.safetyBufferHit) {
         this.safetyBufferHit = true;
         logger.warn(`⚠️ SAFETY BUFFER HIT ($${config.safetyBuffer}). No new trades for rest of day.`);
       }
       return { allowed: false, reason: `Safety buffer reached ($${config.safetyBuffer})`, dailyLossRemaining: remaining, tradesLeftToday: 0 };
+    }
+
+    if (totalAccountPnL >= config.targetProfit) {
+      if (tradingDays >= config.minTradingDaysPerPhase) {
+        return {
+          allowed: false,
+          reason: `Phase ${config.challengePhase} complete — target $${config.targetProfit} + ${tradingDays} trading days`,
+          dailyLossRemaining: remaining,
+          tradesLeftToday: 0,
+        };
+      }
+      if (this.tradesExecutedToday >= 1) {
+        return {
+          allowed: false,
+          reason: `Target hit — resume next day (${tradingDays}/${config.minTradingDaysPerPhase} trading days)`,
+          dailyLossRemaining: remaining,
+          tradesLeftToday: 0,
+        };
+      }
+      return {
+        allowed: true,
+        reason: `Target hit — 1 maintenance trade for trading day ${tradingDays + 1}/${config.minTradingDaysPerPhase}`,
+        dailyLossRemaining: remaining,
+        tradesLeftToday: 1,
+      };
     }
 
     if (this.tradesExecutedToday >= config.maxTradesPerDay) {
