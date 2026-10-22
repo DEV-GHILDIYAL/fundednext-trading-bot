@@ -7,6 +7,22 @@ const num = (value: string | undefined, fallback: number): number => {
   return value !== undefined && value.trim() !== '' && Number.isFinite(parsed) ? parsed : fallback;
 };
 
+// FundedNext rule set (percentages are of the initial account balance).
+// Adjust MAX_LOSS_PERCENT / PROFIT_TARGET_PERCENT for your challenge type:
+//   1-Step = 6% max loss, 2-Step = 10% max loss, Lite = 8% max loss.
+const accountBalance = num(process.env.ACCOUNT_BALANCE, 6000);
+const riskPercent = Math.min(num(process.env.RISK_PERCENT, 0.75), 1);
+const maxTradesPerDay = Math.min(num(process.env.MAX_TRADES_PER_DAY, 3), 3);
+const riskPerTrade = parseFloat((accountBalance * (riskPercent / 100)).toFixed(2));
+const dailyLossPercent = Math.min(num(process.env.DAILY_LOSS_PERCENT, 5), 5);
+const maxDailyLoss = parseFloat((accountBalance * (dailyLossPercent / 100)).toFixed(2));
+const maxLossPercent = Math.min(num(process.env.MAX_LOSS_PERCENT, 10), 10);
+const maxTotalLoss = parseFloat((accountBalance * (maxLossPercent / 100)).toFixed(2));
+const profitTargetPercent = num(process.env.PROFIT_TARGET_PERCENT, 8);
+const targetProfit = parseFloat((accountBalance * (profitTargetPercent / 100)).toFixed(2));
+const safetyBuffer = parseFloat((riskPerTrade * maxTradesPerDay).toFixed(2));
+const minTradeDurationSeconds = Math.max(30, num(process.env.MIN_TRADE_DURATION_SECONDS, 30));
+
 export const config = {
   // Environment
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -25,13 +41,19 @@ export const config = {
   aiReviewEnabled: process.env.AI_REVIEW_ENABLED === 'true',
   aiMinConfidence: num(process.env.AI_MIN_CONFIDENCE, 0.55),
 
-  // Account Configuration
-  accountBalance: num(process.env.ACCOUNT_BALANCE, 6000),
-  riskPerTrade: num(process.env.RISK_PER_TRADE, 30),
-  targetProfit: num(process.env.TARGET_PROFIT, 300),
-  maxDailyLoss: num(process.env.MAX_DAILY_LOSS, 100),
-  maxTradesPerDay: num(process.env.MAX_TRADES_PER_DAY, 3),
-  safetyBuffer: num(process.env.SAFETY_BUFFER, 70),
+  // Account Configuration (FundedNext rules)
+  accountBalance,
+  riskPercent,
+  riskPerTrade,
+  targetProfit,
+  profitTargetPercent,
+  maxDailyLoss,
+  dailyLossPercent,
+  maxTotalLoss,
+  maxLossPercent,
+  maxTradesPerDay,
+  safetyBuffer,
+  minTradeDurationSeconds,
 
   // Database
   dbPath: process.env.DB_PATH || './data/trades.db',

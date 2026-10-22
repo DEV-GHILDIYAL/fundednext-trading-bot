@@ -44,7 +44,20 @@ export class TradeMonitor {
     trade.pnl = Calculator.calculatePnL(trade.entryPrice, trade.currentPrice, trade.quantity, trade.type);
     trade.pnlPercent = parseFloat(((trade.pnl / config.riskPerTrade) * 100).toFixed(1));
 
-    return this.checkExit(trade);
+    const exit = this.checkExit(trade);
+    if (exit) {
+      const ageMs = Date.now() - trade.openedAt.getTime();
+      const minHoldMs = config.minTradeDurationSeconds * 1000;
+      if (ageMs < minHoldMs) {
+        logger.debug(
+          `⏳ ${trade.pair} ${exit} hit after ${(ageMs / 1000).toFixed(1)}s — ` +
+            `holding until the ${config.minTradeDurationSeconds}s minimum`
+        );
+        return null;
+      }
+    }
+
+    return exit;
   }
 
   checkExit(trade: OpenTrade): ExitReason | null {

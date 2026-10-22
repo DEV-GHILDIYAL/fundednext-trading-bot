@@ -18,13 +18,24 @@ export class RiskManager {
 
   /**
    * Can a new trade be opened? Uses realized + unrealized P&L.
+   * `realizedTotalPnL` is the all-time closed P&L (used for the FundedNext
+   * maximum-loss and profit-target rules).
    */
-  canPlaceTrade(unrealizedPnL: number = 0): RiskCheckResult {
+  canPlaceTrade(unrealizedPnL: number = 0, realizedTotalPnL: number = 0): RiskCheckResult {
     const total = this.dailyLossAmount + unrealizedPnL;
+    const totalAccountPnL = realizedTotalPnL + unrealizedPnL;
     const remaining = Math.max(0, config.maxDailyLoss + total);
 
     if (total <= -config.maxDailyLoss) {
       return { allowed: false, reason: `Daily loss limit reached ($${config.maxDailyLoss})`, dailyLossRemaining: 0, tradesLeftToday: 0 };
+    }
+
+    if (totalAccountPnL <= -config.maxTotalLoss) {
+      return { allowed: false, reason: `Maximum loss limit reached ($${config.maxTotalLoss})`, dailyLossRemaining: remaining, tradesLeftToday: 0 };
+    }
+
+    if (totalAccountPnL >= config.targetProfit) {
+      return { allowed: false, reason: `Profit target reached ($${config.targetProfit})`, dailyLossRemaining: remaining, tradesLeftToday: 0 };
     }
 
     if (this.safetyBufferHit || total <= -config.safetyBuffer) {

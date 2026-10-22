@@ -111,14 +111,18 @@ export class PriceActionAnalyzer {
   /**
    * Calculate momentum (price velocity)
    */
-  static calculateMomentum(candles: CandleData[], period: number = 5): number {
+  static calculateMomentum(
+    candles: CandleData[],
+    period: number = 5,
+    pipSize: number = 0.0001
+  ): number {
     if (candles.length < period + 1) return 0;
 
     const currentClose = candles[candles.length - 1].close;
     const previousClose = candles[candles.length - period - 1].close;
 
     const momentum = currentClose - previousClose;
-    const momentumPips = momentum / 0.0001;
+    const momentumPips = momentum / pipSize;
 
     logger.debug('Momentum calculated', { momentumPips: momentumPips.toFixed(1) });
 
@@ -128,12 +132,16 @@ export class PriceActionAnalyzer {
   /**
    * Analyze market volatility using range
    */
-  static analyzeVolatility(candles: CandleData[], period: number = 10): number {
+  static analyzeVolatility(
+    candles: CandleData[],
+    period: number = 10,
+    pipSize: number = 0.0001
+  ): number {
     if (candles.length < period) return 0;
 
     const ranges = candles
       .slice(-period)
-      .map((c) => (c.high - c.low) / 0.0001); // in pips
+      .map((c) => (c.high - c.low) / pipSize); // in pips
 
     const averageRange = ranges.reduce((a, b) => a + b, 0) / period;
 
@@ -145,7 +153,11 @@ export class PriceActionAnalyzer {
   /**
    * Generate composite price action signal
    */
-  static generateSignal(candles: CandleData[], atrPips: number): PriceActionSignal {
+  static generateSignal(
+    candles: CandleData[],
+    atrPips: number,
+    pipSize: number = 0.0001
+  ): PriceActionSignal {
     if (candles.length < 2) {
       return { pattern: 'INSUFFICIENT_DATA', direction: 'NEUTRAL', strength: 0, confidence: 0, description: 'Not enough candles' };
     }
@@ -156,7 +168,7 @@ export class PriceActionAnalyzer {
     const isPinBar = this.detectPinBar(lastCandle);
     const engulfing = this.detectEngulfing(previousCandle, lastCandle);
     const isInsideBar = this.detectInsideBar(previousCandle, lastCandle);
-    const volatility = this.analyzeVolatility(candles);
+    const volatility = this.analyzeVolatility(candles, 10, pipSize);
 
     let signal: PriceActionSignal;
 

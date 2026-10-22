@@ -1,11 +1,12 @@
-// Risk Management Constants
+// Risk Management Constants (FundedNext rules; runtime values live in src/config.ts)
 export const RISK_CONFIG = {
-  MAX_DAILY_LOSS: 100,
-  SAFETY_BUFFER: 70,
+  RISK_PERCENT: 0.75,
+  MAX_DAILY_LOSS_PERCENT: 5,
+  MAX_LOSS_PERCENT: 10,
   MAX_TRADES_PER_DAY: 3,
-  RISK_PER_TRADE: 30,
-  MIN_REWARD_RATIO: 2, // 1:2 minimum
-  TARGET_PROFIT: 300,
+  MIN_REWARD_RATIO: 2, // 1:2 exactly
+  MIN_TRADE_DURATION_SECONDS: 30,
+  TARGET_PROFIT_PERCENT: 8,
 };
 
 // Time Windows (in IST - UTC+5:30)

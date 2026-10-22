@@ -77,10 +77,10 @@ export class Validator {
     }
   }
 
-  static validateRRRatio(ratio: number, minRatio: number = 1.5): void {
-    if (ratio < minRatio) {
+  static validateRRRatio(ratio: number, expected: number = 2, tolerance: number = 0.02): void {
+    if (!Number.isFinite(ratio) || Math.abs(ratio - expected) > tolerance) {
       throw new ValidationError(
-        `Risk-Reward ratio (${ratio.toFixed(2)}) is below minimum (${minRatio})`
+        `Risk-Reward ratio must be 1:${expected} (got 1:${Number.isFinite(ratio) ? ratio.toFixed(2) : 'invalid'})`
       );
     }
   }

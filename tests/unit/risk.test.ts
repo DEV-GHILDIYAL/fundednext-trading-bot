@@ -2,6 +2,8 @@ import { Calculator } from '../../src/utils/calculator';
 import { RiskManager } from '../../src/services/riskManager';
 import { TradeMonitor } from '../../src/services/tradeMonitor';
 import { getZonedTime, isWithinTradingSession } from '../../src/utils/time';
+import { config } from '../../src/config';
+import { Validator } from '../../src/utils/validator';
 
 describe('Position sizing & P&L', () => {
   it('loses exactly the risk amount at the stop (EURUSD)', () => {
@@ -20,29 +22,80 @@ describe('Position sizing & P&L', () => {
 });
 
 describe('TradeMonitor', () => {
-  it('detects stop loss and take profit', () => {
+  it('detects stop loss and take profit after the minimum hold', () => {
     const monitor = new TradeMonitor();
     const units = Calculator.calculatePositionSize(30, 1.1, 1.095);
     monitor.registerTrade({
       tradeId: 'T1', pair: 'EURUSD', type: 'BUY', entryPrice: 1.1, currentPrice: 1.1,
-      quantity: units, stopLoss: 1.095, takeProfit: 1.11, pnl: 0, pnlPercent: 0, openedAt: new Date(),
+      quantity: units, stopLoss: 1.095, takeProfit: 1.11, pnl: 0, pnlPercent: 0,
+      openedAt: new Date(Date.now() - 31_000),
     });
     expect(monitor.updateTradePrice('T1', { bid: 1.1005, ask: 1.1006 })).toBeNull();
     expect(monitor.updateTradePrice('T1', { bid: 1.111, ask: 1.1111 })).toBe('TAKE_PROFIT');
     expect(monitor.updateTradePrice('T1', { bid: 1.094, ask: 1.0941 })).toBe('STOP_LOSS');
   });
+
+  it('refuses to close a trade before the 30 second minimum', () => {
+    const monitor = new TradeMonitor();
+    const units = Calculator.calculatePositionSize(config.riskPerTrade, 1.1, 1.095);
+    monitor.registerTrade({
+      tradeId: 'T2', pair: 'EURUSD', type: 'BUY', entryPrice: 1.1, currentPrice: 1.1,
+      quantity: units, stopLoss: 1.095, takeProfit: 1.11, pnl: 0, pnlPercent: 0,
+      openedAt: new Date(),
+    });
+    // SL/TP would be hit, but the Quick Strike guard defers the exit.
+    expect(monitor.updateTradePrice('T2', { bid: 1.111, ask: 1.1111 })).toBeNull();
+    expect(monitor.updateTradePrice('T2', { bid: 1.094, ask: 1.0941 })).toBeNull();
+  });
+});
+
+describe('FundedNext rules', () => {
+  it('risks 0.75% of the account balance', () => {
+    expect(config.riskPercent).toBe(0.75);
+    expect(config.riskPerTrade).toBeCloseTo(config.accountBalance * 0.0075, 2);
+  });
+
+  it('allows at most 3 trades per day', () => {
+    expect(config.maxTradesPerDay).toBe(3);
+  });
+
+  it('enforces exactly 1:2 risk-reward', () => {
+    expect(() => Validator.validateRRRatio(2)).not.toThrow();
+    expect(() => Validator.validateRRRatio(2.01)).not.toThrow();
+    expect(() => Validator.validateRRRatio(1.5)).toThrow();
+    expect(() => Validator.validateRRRatio(3)).toThrow();
+  });
 });
 
 describe('RiskManager', () => {
-  it('blocks new trades after the safety buffer is hit', () => {
+  it('allows three 0.75% losses, then blocks for the day', () => {
     const rm = new RiskManager();
     expect(rm.canPlaceTrade().allowed).toBe(true);
     rm.recordTradeOpened();
-    rm.recordTradeClosed(-30);
+    rm.recordTradeClosed(-config.riskPerTrade);
     rm.recordTradeOpened();
-    rm.recordTradeClosed(-30);
+    rm.recordTradeClosed(-config.riskPerTrade);
     expect(rm.canPlaceTrade().allowed).toBe(true);
-    expect(rm.canPlaceTrade(-15).allowed).toBe(false); // -75 incl. unrealized
+    rm.recordTradeOpened();
+    rm.recordTradeClosed(-config.riskPerTrade);
+    expect(rm.canPlaceTrade().allowed).toBe(false);
+  });
+
+  it('blocks at the FundedNext daily loss limit', () => {
+    const rm = new RiskManager();
+    rm.recordTradeOpened();
+    rm.recordTradeClosed(-config.maxDailyLoss);
+    expect(rm.canPlaceTrade().allowed).toBe(false);
+  });
+
+  it('blocks at the FundedNext maximum loss limit', () => {
+    const rm = new RiskManager();
+    expect(rm.canPlaceTrade(0, -config.maxTotalLoss).allowed).toBe(false);
+  });
+
+  it('blocks after the profit target is reached', () => {
+    const rm = new RiskManager();
+    expect(rm.canPlaceTrade(0, config.targetProfit).allowed).toBe(false);
   });
 
   it('blocks after max trades per day', () => {

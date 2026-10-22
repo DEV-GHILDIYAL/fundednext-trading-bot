@@ -14,8 +14,8 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   logger.info(`Received ${signal} — shutting down gracefully`);
 
-  // Hard stop if graceful shutdown hangs
-  setTimeout(() => process.exit(0), 4000).unref();
+  // Hard stop if graceful shutdown hangs (allow the 30s minimum trade duration)
+  setTimeout(() => process.exit(0), config.minTradeDurationSeconds * 1000 + 5000).unref();
 
   try {
     scheduler.stopAll();
@@ -45,8 +45,12 @@ async function main(): Promise<void> {
   logger.info(`Time: ${now.dateKey} ${formatClock(now)} (${config.timezone})`);
   logger.info(`Bot enabled: ${config.botEnabled} | Dry run: ${config.dryRun}`);
   logger.info(
-    `Risk: $${config.riskPerTrade}/trade | Safety buffer $${config.safetyBuffer} | ` +
-      `Max daily loss $${config.maxDailyLoss} | Max ${config.maxTradesPerDay} trades/day`
+    `Risk: ${config.riskPercent}% ($${config.riskPerTrade})/trade | Max ${config.maxTradesPerDay} trades/day | ` +
+      `1:2 RR | no hedging | min hold ${config.minTradeDurationSeconds}s`
+  );
+  logger.info(
+    `FundedNext limits: daily loss $${config.maxDailyLoss} (${config.dailyLossPercent}%) | ` +
+      `max loss $${config.maxTotalLoss} (${config.maxLossPercent}%) | target $${config.targetProfit} (${config.profitTargetPercent}%)`
   );
 
   riskManager.restore(tradeJournal.getTodayStats());

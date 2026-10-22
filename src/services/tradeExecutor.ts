@@ -82,7 +82,7 @@ export class TradeExecutor {
 
     const risk = Math.abs(signal.entryPrice - signal.stopLoss);
     const reward = Math.abs(signal.takeProfit - signal.entryPrice);
-    Validator.validateRRRatio(reward / risk, 1.5);
+    Validator.validateRRRatio(reward / risk, 2, 0.02);
   }
 
   private async executeOrder(request: ExecutionRequest): Promise<ExecutionResult> {

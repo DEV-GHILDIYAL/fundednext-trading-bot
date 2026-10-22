@@ -97,6 +97,10 @@ export class TradingBot {
     logger.info(`Mode: ${tradeExecutor.isDryRun ? 'PAPER (DRY_RUN=true)' : 'LIVE'}`);
     logger.info(`Trading pairs: ${PAIR_LIST.join(', ')} (all other pairs disabled)`);
     logger.info(
+      `Rules: max ${config.maxTradesPerDay}/day | risk ${config.riskPercent}% ($${config.riskPerTrade}) | ` +
+        `1:2 RR | no hedging | min hold ${config.minTradeDurationSeconds}s`
+    );
+    logger.info(
       `Session: ${String(config.londonOpenHour).padStart(2, '0')}:${String(config.londonOpenMinute).padStart(2, '0')}–` +
         `${String(config.londonCloseHour).padStart(2, '0')}:${String(config.londonCloseMinute).padStart(2, '0')} ` +
         `${config.timezone}, Mon–Fri | Cycle every ${config.cycleIntervalSeconds}s`
@@ -180,12 +184,15 @@ export class TradingBot {
     const price = await marketClient.getCurrentPrice(pair);
     this.updatePair(pair, this.quotePatch(price));
 
-    if (tradeMonitor.hasOpenTrade(pair)) {
-      this.updatePair(pair, { status: 'Position open' });
+    if (tradeMonitor.getOpenTrades().length > 0) {
+      this.updatePair(pair, { status: 'Position open (no hedging)' });
       return;
     }
 
-    const risk = riskManager.canPlaceTrade(tradeMonitor.calculateTotalPnL());
+    const risk = riskManager.canPlaceTrade(
+      tradeMonitor.calculateTotalPnL(),
+      tradeJournal.getSummary().totalPnL
+    );
     if (!risk.allowed) {
       this.updatePair(pair, { status: `Blocked: ${risk.reason}` });
       return;
@@ -324,6 +331,20 @@ export class TradingBot {
     try {
       const open = tradeMonitor.getOpenTrades();
       if (open.length === 0) return;
+
+      // FundedNext Quick Strike rule: do not close a trade under 30 seconds.
+      const minAgeMs = config.minTradeDurationSeconds * 1000;
+      const waitMs = Math.max(
+        0,
+        ...open.map((trade) => minAgeMs - (Date.now() - trade.openedAt.getTime()))
+      );
+      if (waitMs > 0) {
+        logger.info(
+          `⏳ Minimum trade duration ${config.minTradeDurationSeconds}s — waiting ${Math.ceil(waitMs / 1000)}s before closing`
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+
       logger.warn(`🔴 Closing ${open.length} position(s): ${reason}`);
 
       for (const trade of open) {

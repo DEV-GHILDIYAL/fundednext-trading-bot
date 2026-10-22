@@ -65,7 +65,7 @@ export class EntrySignalGenerator {
     }
 
     // 2. Price action must agree with breakout direction
-    const priceAction = PriceActionAnalyzer.generateSignal(candles, atrPips);
+    const priceAction = PriceActionAnalyzer.generateSignal(candles, atrPips, spec.pipSize);
     if (priceAction.direction !== breakout.direction) {
       return this.skipSignal(pair, 'Price action not aligned with breakout');
     }
