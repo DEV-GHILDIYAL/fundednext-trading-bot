@@ -18,6 +18,7 @@ interface GroqChatResponse {
   choices?: Array<{
     message?: {
       content?: string;
+      reasoning?: string;
     };
   }>;
 }
@@ -51,7 +52,7 @@ export class GroqClient {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      timeout: 20000,
+      timeout: 30000,
     });
 
     this.client.interceptors.request.use((cfg) => {
@@ -84,59 +85,113 @@ export class GroqClient {
   }
 
   async analyzeTradeOpportunity(prompt: string): Promise<GroqTradeDecision> {
-    const content = await this.complete([
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: prompt },
-    ], 500);
+    // GPT-OSS reasoning models work best with all instructions in the user
+    // message. JSON mode forces the final answer to be valid JSON.
+    const content = await this.complete(
+      [{ role: 'user', content: `${SYSTEM_PROMPT}\n\nTrade details:\n${prompt}` }],
+      4096,
+      true
+    );
 
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error('Invalid Groq response format: expected JSON');
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]) as Partial<GroqTradeDecision>;
-    if (parsed.decision !== 'BUY' && parsed.decision !== 'SELL' && parsed.decision !== 'SKIP') {
-      throw new Error(`Invalid Groq decision: ${String(parsed.decision)}`);
-    }
-
-    const confidence = Number(parsed.confidence);
-    if (!Number.isFinite(confidence)) {
-      throw new Error('Invalid Groq confidence value');
-    }
-
-    const decision: GroqTradeDecision = {
-      decision: parsed.decision,
-      reasoning: String(parsed.reasoning ?? '').slice(0, 1000),
-      confidence: Math.min(1, Math.max(0, confidence)),
-      riskAssessment: String(parsed.riskAssessment ?? '').slice(0, 1000),
-    };
-
+    const decision = this.parseDecision(content);
     logger.info(`Groq Decision: ${decision.decision} (confidence: ${decision.confidence})`);
     return decision;
   }
 
   async chat(messages: GroqMessage[]): Promise<string> {
-    return this.complete(messages, 1024);
+    return this.complete(messages, 1024, false);
   }
 
-  private async complete(messages: GroqMessage[], maxTokens: number): Promise<string> {
+  private parseDecision(content: string): GroqTradeDecision {
+    let parsed: Partial<GroqTradeDecision>;
     try {
-      const response = await this.client.post<GroqChatResponse>('/chat/completions', {
-        model: this.model,
-        messages,
-        temperature: 0.2,
-        max_tokens: maxTokens,
-      });
-
-      const content = response.data?.choices?.[0]?.message?.content;
-      if (typeof content !== 'string' || content.trim() === '') {
-        throw new Error('Groq returned an empty response');
+      parsed = JSON.parse(content.trim()) as Partial<GroqTradeDecision>;
+    } catch {
+      // Fallback: models occasionally wrap JSON in prose/code fences.
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('Invalid Groq response format: expected JSON');
       }
-      return content;
+      parsed = JSON.parse(jsonMatch[0]) as Partial<GroqTradeDecision>;
+    }
+
+    const decisionValue = String(parsed.decision ?? '').toUpperCase();
+    if (decisionValue !== 'BUY' && decisionValue !== 'SELL' && decisionValue !== 'SKIP') {
+      throw new Error(`Invalid Groq decision: ${String(parsed.decision)}`);
+    }
+
+    let confidence = Number(parsed.confidence);
+    if (!Number.isFinite(confidence)) {
+      throw new Error('Invalid Groq confidence value');
+    }
+    // Accept either 0-1 or 0-100 confidence scales.
+    if (confidence > 1 && confidence <= 100) {
+      confidence = confidence / 100;
+    }
+
+    return {
+      decision: decisionValue,
+      reasoning: String(parsed.reasoning ?? '').slice(0, 1000),
+      confidence: Math.min(1, Math.max(0, confidence)),
+      riskAssessment: String(parsed.riskAssessment ?? '').slice(0, 1000),
+    };
+  }
+
+  private usesGptOssControls(): boolean {
+    return this.model.startsWith('openai/gpt-oss');
+  }
+
+  private buildBody(messages: GroqMessage[], maxTokens: number, jsonMode: boolean): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages,
+      temperature: 0.6,
+      max_completion_tokens: maxTokens,
+    };
+
+    if (this.usesGptOssControls()) {
+      // Keep reasoning short and don't return the reasoning field.
+      body.reasoning_effort = 'low';
+      body.include_reasoning = false;
+    }
+
+    if (jsonMode) {
+      body.response_format = { type: 'json_object' };
+    }
+
+    return body;
+  }
+
+  private async complete(messages: GroqMessage[], maxTokens: number, jsonMode: boolean): Promise<string> {
+    try {
+      return await this.request(messages, maxTokens, jsonMode);
     } catch (error) {
-      logger.error('Groq request failed:', error);
+      if (jsonMode && this.isJsonModeError(error)) {
+        logger.warn('Groq rejected JSON mode — retrying without response_format');
+        return this.request(messages, maxTokens, false);
+      }
       throw error;
     }
+  }
+
+  private async request(messages: GroqMessage[], maxTokens: number, jsonMode: boolean): Promise<string> {
+    const response = await this.client.post<GroqChatResponse>(
+      '/chat/completions',
+      this.buildBody(messages, maxTokens, jsonMode)
+    );
+
+    const content = response.data?.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || content.trim() === '') {
+      throw new Error('Groq returned an empty response');
+    }
+    return content;
+  }
+
+  private isJsonModeError(error: unknown): boolean {
+    const err = error as { response?: { status?: number; data?: { error?: { message?: string } } } };
+    if (err.response?.status !== 400) return false;
+    const message = String(err.response?.data?.error?.message ?? '');
+    return /response_format|json_object|json mode/i.test(message);
   }
 
   async validateConnection(): Promise<boolean> {
@@ -146,12 +201,7 @@ export class GroqClient {
     }
 
     try {
-      await this.client.post<GroqChatResponse>('/chat/completions', {
-        model: this.model,
-        max_tokens: 5,
-        temperature: 0,
-        messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
-      });
+      await this.complete([{ role: 'user', content: 'Reply with the single word: ok' }], 512, false);
       logger.info(`✅ Groq API connection validated (${this.model})`);
       return true;
     } catch (error) {

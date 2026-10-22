@@ -17,7 +17,7 @@ export const config = {
   fundednextApiKey: process.env.FUNDEDNEXT_API_KEY || '',
   fundednextAccountId: process.env.FUNDEDNEXT_ACCOUNT_ID || '',
   groqApiKey: process.env.GROQ_API_KEY || '',
-  groqModel: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+  groqModel: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
   groqBaseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
   marketDataApiKey: process.env.MARKET_DATA_API_KEY || '',
 

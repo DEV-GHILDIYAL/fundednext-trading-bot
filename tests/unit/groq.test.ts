@@ -8,8 +8,8 @@ describe('GroqClient', () => {
   });
 
   it('accepts a real-looking key and exposes the configured model', () => {
-    const client = new GroqClient('gsk_test_123456789', 'llama-3.3-70b-versatile');
+    const client = new GroqClient('gsk_test_123456789', 'openai/gpt-oss-120b');
     expect(client.isConfigured()).toBe(true);
-    expect(client.modelName).toBe('llama-3.3-70b-versatile');
+    expect(client.modelName).toBe('openai/gpt-oss-120b');
   });
 });
