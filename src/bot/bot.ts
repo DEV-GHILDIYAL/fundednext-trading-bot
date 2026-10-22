@@ -275,7 +275,7 @@ export class TradingBot {
       `Price action: ${signal.components.priceAction.pattern} (${signal.components.priceAction.direction})`,
       `Nearest support: ${signal.components.supportResistance.support?.level ?? 'none'}`,
       `Nearest resistance: ${signal.components.supportResistance.resistance?.level ?? 'none'}`,
-      'Fixed risk: $30 per trade. Reject setups that contradict the breakout or sit directly into a nearby level.',
+      `Fixed risk: $${config.riskPerTrade} per trade (${config.riskPercent}% of $${config.accountBalance}). Reject setups that contradict the breakout or sit directly into a nearby level.`,
     ].join('\n');
 
     try {
