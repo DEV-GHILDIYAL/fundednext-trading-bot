@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger';
 import { getPairSpec, PAIR_LIST, roundPrice } from '../constants/pairs';
 import { Calculator } from '../utils/calculator';
+import { config } from '../config';
 
 export interface PriceData {
   pair: string;
@@ -85,8 +86,9 @@ export class MarketDataClient {
 
     const spec = getPairSpec(pair);
     const steps = Math.min(Math.floor((now - state.lastTick) / TICK_INTERVAL_MS), 720);
+    const stepSize = spec.mockHourlyRange * 0.15 * config.simVolatility;
     for (let i = 0; i < steps; i++) {
-      state.price += (Math.random() - 0.5) * spec.mockHourlyRange * 0.15;
+      state.price += (Math.random() - 0.5) * stepSize;
     }
     state.lastTick = now;
 
@@ -158,7 +160,10 @@ export class MarketDataClient {
     try {
       await this.getCurrentPrice(PAIR_LIST[0]);
       if (this.isSimulated) {
-        logger.warn('⚠️ Market data: SIMULATED feed (not real prices). Paper trading only.');
+        logger.warn(
+          `⚠️ Market data: SIMULATED feed (not real prices). Paper trading only. ` +
+            `Volatility ×${config.simVolatility}`
+        );
       } else {
         logger.info('✅ Market data connection validated');
       }

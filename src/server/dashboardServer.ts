@@ -31,6 +31,7 @@ export function buildStatus(): Record<string, unknown> {
     clock: { date: now.dateKey, time: formatClock(now), timezone: config.timezone },
     mode: tradeExecutor.isDryRun ? 'PAPER' : 'LIVE',
     dataSource: marketClient.isSimulated ? 'SIMULATED' : 'LIVE',
+    simVolatility: config.simVolatility,
     bot: {
       enabled: config.botEnabled,
       cycleSeconds: config.cycleIntervalSeconds,

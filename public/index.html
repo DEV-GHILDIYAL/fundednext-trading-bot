@@ -314,6 +314,7 @@
     $('clock').textContent = d.clock.time + ' IST';
 
     const bot = d.bot;
+    const vol = Number(d.simVolatility) || 1;
     active = !!(bot.running && bot.inSession);
     botState = !bot.running ? 'off' : bot.inSession ? 'on' : 'wait';
     cycleSec = Number(bot.cycleSeconds) || 30;
@@ -329,14 +330,15 @@
     const botBadge = !bot.enabled ? badge('BOT DISABLED', 'red') : bot.running ? badge('BOT RUNNING', 'green') : badge('BOT STOPPED', 'red');
     $('badges').innerHTML = botBadge +
       badge(d.mode, d.mode === 'LIVE' ? 'red' : 'blue') +
-      badge('DATA: ' + d.dataSource, d.dataSource === 'LIVE' ? 'green' : 'amber') +
+      badge('DATA: ' + d.dataSource + (vol !== 1 ? ' ×' + vol : ''), d.dataSource === 'LIVE' ? 'green' : 'amber') +
       badge('PHASE ' + d.phase.number + ' · ' + d.phase.targetPercent + '% TARGET', 'blue') +
       badge('DAYS ' + d.phase.tradingDays + '/' + d.phase.minTradingDays, d.phase.tradingDays >= d.phase.minTradingDays ? 'green' : 'amber') +
       badge(d.session.open ? 'SESSION OPEN' : 'SESSION CLOSED', d.session.open ? 'green' : '');
 
     const notice = $('notice');
     if (d.dataSource === 'SIMULATED') {
-      notice.textContent = 'Simulated market data — prices are not real and all trades are paper trades. P&L here does not reflect strategy performance.';
+      notice.textContent = 'Simulated market data — prices are not real and all trades are paper trades. P&L here does not reflect strategy performance.' +
+        (vol !== 1 ? ' Test volatility ×' + vol + ' (only for faster testing).' : '');
       notice.classList.remove('hidden');
     } else { notice.classList.add('hidden'); }
 

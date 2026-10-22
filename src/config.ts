@@ -76,6 +76,10 @@ export const config = {
   debug: process.env.DEBUG === 'true',
   cycleIntervalSeconds: num(process.env.CYCLE_INTERVAL_SECONDS, 30),
 
+  // Simulated market data volatility multiplier (only affects the mock feed;
+  // 1 = current behaviour, >1 = bigger fake price swings for faster testing)
+  simVolatility: Math.min(Math.max(num(process.env.SIM_VOLATILITY, 1), 0.1), 10),
+
   // Trading Hours — interpreted in BOT_TIMEZONE, independent of server timezone
   timezone: process.env.BOT_TIMEZONE || 'Asia/Kolkata',
   londonOpenHour: num(process.env.LONDON_OPEN_HOUR, 13),
