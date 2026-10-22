@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger';
-import { getPairSpec, roundPrice } from '../constants/pairs';
+import { getPairSpec, PAIR_LIST, roundPrice } from '../constants/pairs';
 import { Calculator } from '../utils/calculator';
 
 export interface PriceData {
@@ -156,7 +156,7 @@ export class MarketDataClient {
 
   async validateConnection(): Promise<boolean> {
     try {
-      await this.getCurrentPrice('EURUSD');
+      await this.getCurrentPrice(PAIR_LIST[0]);
       if (this.isSimulated) {
         logger.warn('⚠️ Market data: SIMULATED feed (not real prices). Paper trading only.');
       } else {

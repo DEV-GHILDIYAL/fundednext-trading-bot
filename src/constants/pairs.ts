@@ -1,9 +1,21 @@
-export const PAIR_LIST = ['EURUSD', 'GBPUSD', 'XAUUSD'] as const;
+/**
+ * Pairs the bot is allowed to open new trades on.
+ * Keep this list to XAUUSD only unless you explicitly want to trade more pairs.
+ */
+export const PAIR_LIST = ['XAUUSD'] as const;
 
 export type TradingPair = (typeof PAIR_LIST)[number];
 
+/**
+ * Pairs we still know the contract specs for. Non-tradable pairs are kept so
+ * old journal entries (EURUSD/GBPUSD) still render correctly on the dashboard.
+ */
+export const KNOWN_PAIRS = ['EURUSD', 'GBPUSD', 'XAUUSD'] as const;
+
+export type KnownPair = (typeof KNOWN_PAIRS)[number];
+
 export interface PairSpec {
-  name: TradingPair;
+  name: KnownPair;
   /** Price change that equals 1 pip */
   pipSize: number;
   /** Decimal places used when rounding prices */
@@ -18,7 +30,7 @@ export interface PairSpec {
   mockSpread: number;
 }
 
-export const PAIR_SPECS: Record<TradingPair, PairSpec> = {
+export const PAIR_SPECS: Record<KnownPair, PairSpec> = {
   EURUSD: {
     name: 'EURUSD',
     pipSize: 0.0001,
@@ -52,8 +64,12 @@ export function isTradingPair(pair: string): pair is TradingPair {
   return (PAIR_LIST as readonly string[]).includes(pair);
 }
 
+export function isKnownPair(pair: string): pair is KnownPair {
+  return (KNOWN_PAIRS as readonly string[]).includes(pair);
+}
+
 export function getPairSpec(pair: string): PairSpec {
-  if (!isTradingPair(pair)) {
+  if (!isKnownPair(pair)) {
     throw new Error(`Unsupported trading pair: ${pair}`);
   }
   return PAIR_SPECS[pair];

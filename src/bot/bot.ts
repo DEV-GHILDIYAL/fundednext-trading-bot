@@ -95,6 +95,7 @@ export class TradingBot {
       logger.info(groqClient.isConfigured() ? '🧠 AI signal review: ENABLED (Groq)' : '⚠️ AI signal review enabled but GROQ_API_KEY is missing');
     }
     logger.info(`Mode: ${tradeExecutor.isDryRun ? 'PAPER (DRY_RUN=true)' : 'LIVE'}`);
+    logger.info(`Trading pairs: ${PAIR_LIST.join(', ')} (all other pairs disabled)`);
     logger.info(
       `Session: ${String(config.londonOpenHour).padStart(2, '0')}:${String(config.londonOpenMinute).padStart(2, '0')}–` +
         `${String(config.londonCloseHour).padStart(2, '0')}:${String(config.londonCloseMinute).padStart(2, '0')} ` +
