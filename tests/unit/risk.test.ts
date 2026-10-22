@@ -46,6 +46,12 @@ describe('TradeMonitor', () => {
     // SL/TP would be hit, but the Quick Strike guard defers the exit.
     expect(monitor.updateTradePrice('T2', { bid: 1.111, ask: 1.1111 })).toBeNull();
     expect(monitor.updateTradePrice('T2', { bid: 1.094, ask: 1.0941 })).toBeNull();
+
+    // After 30s the original TP is honoured even if price has recovered.
+    const trade = monitor.getTradeStatus('T2');
+    expect(trade).not.toBeNull();
+    trade!.openedAt = new Date(Date.now() - 31_000);
+    expect(monitor.updateTradePrice('T2', { bid: 1.1005, ask: 1.1006 })).toBe('TAKE_PROFIT');
   });
 });
 

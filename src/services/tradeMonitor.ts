@@ -24,6 +24,8 @@ export type ExitReason = 'STOP_LOSS' | 'TAKE_PROFIT';
 
 export class TradeMonitor {
   private openTrades: Map<string, OpenTrade> = new Map();
+  /** SL/TP hit during the 30s Quick Strike lockout, to close once the lockout ends. */
+  private pendingExits: Map<string, ExitReason> = new Map();
 
   registerTrade(trade: OpenTrade): void {
     this.openTrades.set(trade.tradeId, trade);
@@ -44,20 +46,38 @@ export class TradeMonitor {
     trade.pnl = Calculator.calculatePnL(trade.entryPrice, trade.currentPrice, trade.quantity, trade.type);
     trade.pnlPercent = parseFloat(((trade.pnl / config.riskPerTrade) * 100).toFixed(1));
 
+    const ageMs = Date.now() - trade.openedAt.getTime();
+    const minHoldMs = config.minTradeDurationSeconds * 1000;
     const exit = this.checkExit(trade);
+
     if (exit) {
-      const ageMs = Date.now() - trade.openedAt.getTime();
-      const minHoldMs = config.minTradeDurationSeconds * 1000;
       if (ageMs < minHoldMs) {
-        logger.debug(
-          `⏳ ${trade.pair} ${exit} hit after ${(ageMs / 1000).toFixed(1)}s — ` +
-            `holding until the ${config.minTradeDurationSeconds}s minimum`
-        );
+        if (!this.pendingExits.has(tradeId)) {
+          this.pendingExits.set(tradeId, exit);
+          logger.debug(
+            `⏳ ${trade.pair} ${exit} hit after ${(ageMs / 1000).toFixed(1)}s — ` +
+              `holding until the ${config.minTradeDurationSeconds}s minimum`
+          );
+        }
         return null;
+      }
+      return exit;
+    }
+
+    // Price recovered during the lockout, but the original SL/TP was already hit.
+    // Honour that exit once the minimum hold has elapsed.
+    if (ageMs >= minHoldMs) {
+      const pending = this.pendingExits.get(tradeId);
+      if (pending) {
+        this.pendingExits.delete(tradeId);
+        logger.info(
+          `⏳ Minimum hold reached — closing ${trade.pair} at pending ${pending}`
+        );
+        return pending;
       }
     }
 
-    return exit;
+    return null;
   }
 
   checkExit(trade: OpenTrade): ExitReason | null {
@@ -84,6 +104,7 @@ export class TradeMonitor {
 
   removeTrade(tradeId: string): void {
     this.openTrades.delete(tradeId);
+    this.pendingExits.delete(tradeId);
   }
 
   /** Total unrealized P&L of open trades */
