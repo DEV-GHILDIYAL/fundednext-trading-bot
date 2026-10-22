@@ -46,6 +46,33 @@
   .dot.ok { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
   .dot.bad { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
 
+  /* --- liveness / activity indicators --- */
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+  .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; flex: none; }
+  .live.on { color: var(--green); }
+  .live.on i { background: var(--green); animation: pulse 1.5s ease-out infinite; }
+  .live.wait { color: var(--amber); }
+  .live.wait i { background: var(--amber); }
+  .live.off { color: var(--red); }
+  .live.off i { background: var(--red); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(34,197,94,.5); }
+    70% { box-shadow: 0 0 0 9px rgba(34,197,94,0); }
+    100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+  }
+  .h2right { display: inline-flex; align-items: center; gap: 10px; }
+  .scanline { height: 3px; border-radius: 999px; background: var(--panel-2); margin: 10px 0 6px; overflow: hidden; }
+  .scanline .bar { height: 100%; width: 0; background: var(--green); border-radius: 999px; transition: width .2s linear; }
+  .scanline.idle .bar { background: var(--border); }
+  .scanmeta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+  .scanmeta .num { color: var(--muted); }
+  #spark { width: 100%; height: 56px; display: block; margin-top: 8px; }
+  .card.scanning { box-shadow: 0 0 0 1px rgba(34,197,94,.3), 0 0 26px -14px rgba(34,197,94,.6); }
+  td.flash-up { animation: flashUp .9s ease-out; }
+  td.flash-down { animation: flashDown .9s ease-out; }
+  @keyframes flashUp { 0% { background: rgba(34,197,94,.3); } 100% { background: transparent; } }
+  @keyframes flashDown { 0% { background: rgba(240,82,82,.3); } 100% { background: transparent; } }
+
   .notice { padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(245,165,36,.25); }
   .notice.hidden { display: none; }
 
@@ -132,14 +159,22 @@
   </section>
 
   <section class="grid">
-    <div class="card">
-      <h2>Market watch <span class="muted" id="sessionInfo"></span></h2>
+    <div class="card" id="marketCard">
+      <h2>Market watch
+        <span class="h2right">
+          <span class="muted" id="sessionInfo"></span>
+          <span class="live" id="live"><i></i><span id="liveText">—</span></span>
+        </span>
+      </h2>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Pair</th><th class="r">Bid</th><th class="r">Ask</th><th class="r">Spread</th><th class="r">Prev high</th><th class="r">Prev low</th><th class="r">ATR</th><th>Status</th></tr></thead>
           <tbody id="market"></tbody>
         </table>
       </div>
+      <div class="scanline" id="scanLine"><div class="bar" id="scanFill"></div></div>
+      <div class="scanmeta"><span id="scanState">—</span><span class="num" id="scanCycle"></span></div>
+      <svg id="spark" viewBox="0 0 300 56" preserveAspectRatio="none" role="img" aria-label="Recent bid movement"></svg>
     </div>
     <div class="card">
       <h2>Equity curve <span class="muted">realized P&amp;L</span></h2>
@@ -194,6 +229,16 @@
   const dateTime = (iso) => (iso ? new Date(iso).toLocaleString('en-IN', { timeZone: tz, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
   let lastOk = 0;
 
+  // --- liveness state ---
+  let botState = 'off';        // 'on' = scanning, 'wait' = session closed, 'off' = stopped
+  let active = false;
+  let cycleSec = 30;
+  let lastCycleMs = 0;
+  let lastCycleNum = null;
+  const lastBids = new Map();
+  let spark = [];
+  let sparkPair = null;
+
   function badge(text, color) { return '<span class="badge ' + color + '">' + esc(text) + '</span>'; }
 
   function render(d) {
@@ -201,6 +246,18 @@
     $('clock').textContent = d.clock.time + ' IST';
 
     const bot = d.bot;
+    active = !!(bot.running && bot.inSession);
+    botState = !bot.running ? 'off' : bot.inSession ? 'on' : 'wait';
+    cycleSec = Number(bot.cycleSeconds) || 30;
+    lastCycleMs = Date.parse(bot.lastCycleAt || '') || 0;
+    lastCycleNum = bot.cycle;
+
+    $('live').className = 'live ' + botState;
+    $('liveText').textContent =
+      botState === 'on' ? 'scanning' : botState === 'wait' ? 'idle — session closed' : 'bot stopped';
+    $('marketCard').classList.toggle('scanning', active);
+    $('scanLine').classList.toggle('idle', !active);
+
     const botBadge = !bot.enabled ? badge('BOT DISABLED', 'red') : bot.running ? badge('BOT RUNNING', 'green') : badge('BOT STOPPED', 'red');
     $('badges').innerHTML = botBadge +
       badge(d.mode, d.mode === 'LIVE' ? 'red' : 'blue') +
@@ -245,16 +302,29 @@
 
     // Market watch
     $('sessionInfo').textContent = d.session.opens + '–' + d.session.closes + ' IST · ' + d.session.days;
-    $('market').innerHTML = bot.pairs.map((p) =>
-      '<tr><td><b>' + esc(p.pair) + '</b></td>' +
-      '<td class="r num">' + px(p.pair, p.bid) + '</td>' +
-      '<td class="r num">' + px(p.pair, p.ask) + '</td>' +
-      '<td class="r num">' + (p.spreadPips ?? '—') + '</td>' +
-      '<td class="r num">' + px(p.pair, p.prevHigh) + '</td>' +
-      '<td class="r num">' + px(p.pair, p.prevLow) + '</td>' +
-      '<td class="r num">' + (p.atrPips ?? '—') + '</td>' +
-      '<td class="status">' + esc(p.status) + '</td></tr>'
-    ).join('');
+    $('market').innerHTML = bot.pairs.map((p) => {
+      const prev = lastBids.get(p.pair);
+      const moved = active && typeof prev === 'number' && typeof p.bid === 'number' && p.bid !== prev;
+      const flash = moved ? (p.bid > prev ? ' flash-up' : ' flash-down') : '';
+      lastBids.set(p.pair, p.bid);
+      return '<tr><td><b>' + esc(p.pair) + '</b></td>' +
+        '<td class="r num' + flash + '">' + px(p.pair, p.bid) + '</td>' +
+        '<td class="r num">' + px(p.pair, p.ask) + '</td>' +
+        '<td class="r num">' + (p.spreadPips ?? '—') + '</td>' +
+        '<td class="r num">' + px(p.pair, p.prevHigh) + '</td>' +
+        '<td class="r num">' + px(p.pair, p.prevLow) + '</td>' +
+        '<td class="r num">' + (p.atrPips ?? '—') + '</td>' +
+        '<td class="status">' + esc(p.status) + '</td></tr>';
+    }).join('');
+
+    // Tick sparkline — only collects while the bot is actually scanning
+    const primary = bot.pairs[0];
+    if (primary && active && typeof primary.bid === 'number') {
+      if (sparkPair !== primary.pair) { spark = []; sparkPair = primary.pair; }
+      if (spark[spark.length - 1] !== primary.bid) spark.push(primary.bid);
+      if (spark.length > 60) spark.shift();
+    }
+    renderSpark(primary ? primary.pair : 'XAUUSD', active);
 
     // Open positions
     $('openCount').textContent = d.openTrades.length ? '(' + d.openTrades.length + ')' : '';
@@ -314,6 +384,44 @@
       '<text x="' + (W - P) + '" y="' + (P + 4) + '" text-anchor="end" fill="' + color + '" font-size="13" font-family="monospace">' + money(last) + '</text>';
   }
 
+  function renderSpark(pair, isActive) {
+    const svg = $('spark');
+    if (spark.length < 2) {
+      svg.innerHTML = '<text x="150" y="33" text-anchor="middle" fill="#8593a3" font-size="10">' +
+        (isActive ? 'collecting ticks…' : 'no live ticks — bot is idle') + '</text>';
+      return;
+    }
+    const W = 300, H = 56, P = 4;
+    const min = Math.min(...spark), max = Math.max(...spark);
+    const span = max - min || 0.0001;
+    const x = (i) => P + (i / (spark.length - 1)) * (W - 2 * P);
+    const y = (v) => H - P - ((v - min) / span) * (H - 2 * P);
+    const pts = spark.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+    const lastVal = spark[spark.length - 1];
+    const color = isActive ? (lastVal >= spark[0] ? '#22c55e' : '#f05252') : '#8593a3';
+    svg.innerHTML =
+      '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.5" ' +
+        'vector-effect="non-scaling-stroke" stroke-linejoin="round"/>' +
+      '<circle cx="' + x(spark.length - 1).toFixed(1) + '" cy="' + y(lastVal).toFixed(1) + '" r="2" fill="' + color + '"/>' +
+      '<text x="' + (W - P) + '" y="10" text-anchor="end" fill="' + color + '" font-size="9" font-family="monospace">' +
+        Number(lastVal).toFixed(digits(pair)) + '</text>';
+  }
+
+  function uiTick() {
+    const elapsed = lastCycleMs ? (Date.now() - lastCycleMs) / 1000 : 0;
+    const pct = active && cycleSec > 0 ? Math.min(100, (elapsed / cycleSec) * 100) : 0;
+    $('scanFill').style.width = pct.toFixed(1) + '%';
+    $('scanCycle').textContent = lastCycleNum === null ? '' : 'cycle #' + lastCycleNum;
+    if (botState === 'on') {
+      $('scanState').textContent =
+        'next scan in ' + Math.max(0, cycleSec - elapsed).toFixed(0) + 's · last ' + elapsed.toFixed(0) + 's ago';
+    } else if (botState === 'wait') {
+      $('scanState').textContent = 'paused — outside session hours, no scanning';
+    } else {
+      $('scanState').textContent = lastCycleNum === null ? 'waiting for status…' : 'stopped — bot is not running';
+    }
+  }
+
   function setConn(ok, text) {
     $('connDot').className = 'dot ' + (ok ? 'ok' : 'bad');
     $('connText').textContent = text;
@@ -333,6 +441,7 @@
       setTimeout(tick, REFRESH_MS);
     }
   }
+  setInterval(uiTick, 500);
   tick();
 })();
 </script>

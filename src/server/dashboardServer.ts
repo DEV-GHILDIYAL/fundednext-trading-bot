@@ -31,7 +31,11 @@ export function buildStatus(): Record<string, unknown> {
     clock: { date: now.dateKey, time: formatClock(now), timezone: config.timezone },
     mode: tradeExecutor.isDryRun ? 'PAPER' : 'LIVE',
     dataSource: marketClient.isSimulated ? 'SIMULATED' : 'LIVE',
-    bot: { enabled: config.botEnabled, ...bot.getSnapshot() },
+    bot: {
+      enabled: config.botEnabled,
+      cycleSeconds: config.cycleIntervalSeconds,
+      ...bot.getSnapshot(),
+    },
     session: {
       open: isWithinTradingSession(),
       opens: `${pad(config.londonOpenHour)}:${pad(config.londonOpenMinute)}`,
