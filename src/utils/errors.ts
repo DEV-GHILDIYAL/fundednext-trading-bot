@@ -17,10 +17,10 @@ export class FundedNextError extends APIError {
   }
 }
 
-export class ClaudeAPIError extends APIError {
+export class GroqAPIError extends APIError {
   constructor(status: number, message: string, originalError?: any) {
-    super('CLAUDE_API_ERROR', status, message, originalError);
-    this.name = 'ClaudeAPIError';
+    super('GROQ_API_ERROR', status, message, originalError);
+    this.name = 'GroqAPIError';
   }
 }
 

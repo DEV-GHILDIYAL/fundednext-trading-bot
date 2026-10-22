@@ -4,7 +4,7 @@ export { Validator } from './validator';
 export {
   APIError,
   FundedNextError,
-  ClaudeAPIError,
+  GroqAPIError,
   MarketDataError,
   ValidationError,
   TradeError,

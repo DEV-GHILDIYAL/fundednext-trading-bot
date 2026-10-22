@@ -16,9 +16,14 @@ export const config = {
   // API Keys
   fundednextApiKey: process.env.FUNDEDNEXT_API_KEY || '',
   fundednextAccountId: process.env.FUNDEDNEXT_ACCOUNT_ID || '',
-  claudeApiKey: process.env.CLAUDE_API_KEY || '',
-  claudeModel: process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001',
+  groqApiKey: process.env.GROQ_API_KEY || '',
+  groqModel: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+  groqBaseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
   marketDataApiKey: process.env.MARKET_DATA_API_KEY || '',
+
+  // Optional AI review of generated signals (off by default; strategy rules still run)
+  aiReviewEnabled: process.env.AI_REVIEW_ENABLED === 'true',
+  aiMinConfidence: num(process.env.AI_MIN_CONFIDENCE, 0.55),
 
   // Account Configuration
   accountBalance: num(process.env.ACCOUNT_BALANCE, 6000),

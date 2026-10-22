@@ -1,8 +1,8 @@
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { marketClient, PriceData } from '../api/market';
-import { claudeClient } from '../api/claude';
-import { EntrySignalGenerator } from '../strategies/entrySignalGenerator';
+import { groqClient } from '../api/groq';
+import { EntrySignalGenerator, TradeSignal } from '../strategies/entrySignalGenerator';
 import { tradeExecutor } from '../services/tradeExecutor';
 import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
 import { riskManager } from '../services/riskManager';
@@ -90,7 +90,10 @@ export class TradingBot {
 
   private async validateSetup(): Promise<void> {
     await marketClient.validateConnection();
-    await claudeClient.validateConnection();
+    await groqClient.validateConnection();
+    if (config.aiReviewEnabled) {
+      logger.info(groqClient.isConfigured() ? '🧠 AI signal review: ENABLED (Groq)' : '⚠️ AI signal review enabled but GROQ_API_KEY is missing');
+    }
     logger.info(`Mode: ${tradeExecutor.isDryRun ? 'PAPER (DRY_RUN=true)' : 'LIVE'}`);
     logger.info(
       `Session: ${String(config.londonOpenHour).padStart(2, '0')}:${String(config.londonOpenMinute).padStart(2, '0')}–` +
@@ -206,6 +209,11 @@ export class TradingBot {
       return;
     }
 
+    if (!(await this.reviewWithAI(signal, atrPips))) {
+      this.updatePair(pair, { status: 'AI review rejected signal' });
+      return;
+    }
+
     const result = await tradeExecutor.executeTrade(signal);
     if (!result.success || !result.tradeId || !result.quantity || result.executedPrice === undefined) {
       const reason = result.error ?? result.message;
@@ -231,6 +239,41 @@ export class TradingBot {
     tradeJournal.recordOpen(trade);
     riskManager.recordTradeOpened();
     this.updatePair(pair, { status: `${trade.type} opened` });
+  }
+
+  /**
+   * Optional LLM review of a strategy signal. Fails open: if AI review is
+   * disabled, unconfigured, or errors, the deterministic signal is kept.
+   */
+  private async reviewWithAI(signal: TradeSignal, atrPips: number): Promise<boolean> {
+    if (!config.aiReviewEnabled) return true;
+    if (!groqClient.isConfigured()) return true;
+
+    const prompt = [
+      `Pair: ${signal.pair}`,
+      `Proposed side: ${signal.signal}`,
+      `Entry: ${signal.entryPrice}`,
+      `Stop loss: ${signal.stopLoss}`,
+      `Take profit: ${signal.takeProfit}`,
+      `Risk/reward: 1:${signal.riskRewardRatio}`,
+      `ATR(14): ${atrPips.toFixed(1)} pips`,
+      `Breakout strength: ${signal.components.breakout.strength}/100`,
+      `Price action: ${signal.components.priceAction.pattern} (${signal.components.priceAction.direction})`,
+      `Nearest support: ${signal.components.supportResistance.support?.level ?? 'none'}`,
+      `Nearest resistance: ${signal.components.supportResistance.resistance?.level ?? 'none'}`,
+      'Fixed risk: $30 per trade. Reject setups that contradict the breakout or sit directly into a nearby level.',
+    ].join('\n');
+
+    try {
+      const review = await groqClient.analyzeTradeOpportunity(prompt);
+      logger.info(`🧠 AI review: ${review.decision} (${review.confidence}) — ${review.reasoning}`);
+      if (review.decision === 'SKIP') return false;
+      if (review.decision !== signal.signal) return false;
+      return review.confidence >= config.aiMinConfidence;
+    } catch (error) {
+      logger.warn('AI review failed — continuing with strategy signal', error);
+      return true;
+    }
   }
 
   private async monitorPositions(): Promise<void> {
