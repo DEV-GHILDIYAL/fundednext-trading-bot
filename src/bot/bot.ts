@@ -1,16 +1,38 @@
 import { logger } from '../utils/logger';
 import { config } from '../config';
-import { marketClient } from '../api/market';
+import { marketClient, PriceData } from '../api/market';
 import { claudeClient } from '../api/claude';
 import { EntrySignalGenerator } from '../strategies/entrySignalGenerator';
 import { tradeExecutor } from '../services/tradeExecutor';
 import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
 import { riskManager } from '../services/riskManager';
+import { tradeJournal } from '../services/tradeJournal';
 import { Calculator } from '../utils/calculator';
 import { PAIR_LIST, TradingPair } from '../constants/pairs';
 import { getZonedTime, formatClock, isWithinTradingSession } from '../utils/time';
 
 const MIN_CANDLES = 26; // 24 for previous range + current + 1 spare
+
+export interface PairSnapshot {
+  pair: string;
+  bid: number | null;
+  ask: number | null;
+  spreadPips: number | null;
+  prevHigh: number | null;
+  prevLow: number | null;
+  atrPips: number | null;
+  status: string;
+  updatedAt: string | null;
+}
+
+export interface BotSnapshot {
+  running: boolean;
+  cycle: number;
+  inSession: boolean;
+  startedAt: string | null;
+  lastCycleAt: string | null;
+  pairs: PairSnapshot[];
+}
 
 export class TradingBot {
   private isRunning = false;
@@ -19,10 +41,19 @@ export class TradingBot {
   private sleepTimer: NodeJS.Timeout | null = null;
   private wake: (() => void) | null = null;
   private closing = false;
+  private startedAt: Date | null = null;
+  private lastCycleAt: Date | null = null;
+  private pairStatus = new Map<string, PairSnapshot>(
+    PAIR_LIST.map((pair) => [
+      pair,
+      { pair, bid: null, ask: null, spreadPips: null, prevHigh: null, prevLow: null, atrPips: null, status: 'Waiting', updatedAt: null },
+    ])
+  );
 
   async start(): Promise<void> {
     if (this.isRunning) return;
     this.isRunning = true;
+    this.startedAt = new Date();
 
     logger.info('🤖 Trading bot starting...');
     try {
@@ -44,6 +75,17 @@ export class TradingBot {
 
   get running(): boolean {
     return this.isRunning;
+  }
+
+  getSnapshot(): BotSnapshot {
+    return {
+      running: this.isRunning,
+      cycle: this.currentCycle,
+      inSession: isWithinTradingSession(),
+      startedAt: this.startedAt?.toISOString() ?? null,
+      lastCycleAt: this.lastCycleAt?.toISOString() ?? null,
+      pairs: Array.from(this.pairStatus.values()).map((p) => ({ ...p })),
+    };
   }
 
   private async validateSetup(): Promise<void> {
@@ -70,9 +112,13 @@ export class TradingBot {
           await this.monitorPositions();
           await this.scanAllPairs();
           this.logCycleStats(Date.now() - started);
-        } else if (tradeMonitor.getOpenTrades().length > 0) {
-          await this.closeAllPositions('Session ended');
+        } else {
+          if (tradeMonitor.getOpenTrades().length > 0) {
+            await this.closeAllPositions('Session ended');
+          }
+          await this.refreshQuotes('Session closed');
         }
+        this.lastCycleAt = new Date();
       } catch (error) {
         logger.error('Error in main loop', error);
       }
@@ -92,30 +138,58 @@ export class TradingBot {
     }
   }
 
+  private updatePair(pair: string, patch: Partial<PairSnapshot>): void {
+    const current = this.pairStatus.get(pair);
+    if (!current) return;
+    this.pairStatus.set(pair, { ...current, ...patch, updatedAt: new Date().toISOString() });
+  }
+
+  private quotePatch(price: PriceData): Partial<PairSnapshot> {
+    return { bid: price.bid, ask: price.ask, spreadPips: price.spread };
+  }
+
+  /** Keep prices on the dashboard fresh while not trading */
+  private async refreshQuotes(status: string): Promise<void> {
+    for (const pair of PAIR_LIST) {
+      try {
+        const price = await marketClient.getCurrentPrice(pair);
+        this.updatePair(pair, { ...this.quotePatch(price), status });
+      } catch (error) {
+        logger.debug(`Quote refresh failed for ${pair}`, error);
+      }
+    }
+  }
+
   private async scanAllPairs(): Promise<void> {
     for (const pair of PAIR_LIST) {
       if (!this.isRunning) return;
       try {
         await this.scanPair(pair);
       } catch (error) {
+        this.updatePair(pair, { status: 'Error while scanning' });
         logger.error(`Error scanning ${pair}`, error);
       }
     }
   }
 
   private async scanPair(pair: TradingPair): Promise<void> {
-    if (tradeMonitor.hasOpenTrade(pair)) return;
+    const price = await marketClient.getCurrentPrice(pair);
+    this.updatePair(pair, this.quotePatch(price));
 
-    const risk = riskManager.canPlaceTrade(tradeMonitor.calculateTotalPnL());
-    if (!risk.allowed) {
-      logger.debug(`Trade blocked: ${risk.reason}`);
+    if (tradeMonitor.hasOpenTrade(pair)) {
+      this.updatePair(pair, { status: 'Position open' });
       return;
     }
 
-    const price = await marketClient.getCurrentPrice(pair);
+    const risk = riskManager.canPlaceTrade(tradeMonitor.calculateTotalPnL());
+    if (!risk.allowed) {
+      this.updatePair(pair, { status: `Blocked: ${risk.reason}` });
+      return;
+    }
+
     const candles = await marketClient.getCandles(pair, '1H', 50);
     if (candles.length < MIN_CANDLES) {
-      logger.debug(`Not enough candles for ${pair} (${candles.length})`);
+      this.updatePair(pair, { status: `Warming up (${candles.length}/${MIN_CANDLES} candles)` });
       return;
     }
 
@@ -124,17 +198,23 @@ export class TradingBot {
     const prevHigh = Math.max(...range.map((c) => c.high));
     const prevLow = Math.min(...range.map((c) => c.low));
     const atrPips = await marketClient.calculateATR(pair, 14);
+    this.updatePair(pair, { prevHigh, prevLow, atrPips });
 
     const signal = EntrySignalGenerator.generateTradeSignal(pair, price, prevHigh, prevLow, candles, atrPips);
-    if (signal.signal === 'SKIP') return;
-
-    const result = await tradeExecutor.executeTrade(signal);
-    if (!result.success || !result.tradeId || !result.quantity || result.executedPrice === undefined) {
-      logger.warn(`Trade not opened for ${pair}: ${result.error ?? result.message}`);
+    if (signal.signal === 'SKIP') {
+      this.updatePair(pair, { status: signal.reasoning.replace(/^Skipped:\s*/, '') });
       return;
     }
 
-    tradeMonitor.registerTrade({
+    const result = await tradeExecutor.executeTrade(signal);
+    if (!result.success || !result.tradeId || !result.quantity || result.executedPrice === undefined) {
+      const reason = result.error ?? result.message;
+      this.updatePair(pair, { status: `Order rejected: ${reason}` });
+      logger.warn(`Trade not opened for ${pair}: ${reason}`);
+      return;
+    }
+
+    const trade: OpenTrade = {
       tradeId: result.tradeId,
       pair,
       type: signal.signal === 'BUY' ? 'BUY' : 'SELL',
@@ -146,8 +226,11 @@ export class TradingBot {
       pnl: 0,
       pnlPercent: 0,
       openedAt: result.executedAt ?? new Date(),
-    });
+    };
+    tradeMonitor.registerTrade(trade);
+    tradeJournal.recordOpen(trade);
     riskManager.recordTradeOpened();
+    this.updatePair(pair, { status: `${trade.type} opened` });
   }
 
   private async monitorPositions(): Promise<void> {
@@ -185,7 +268,9 @@ export class TradingBot {
       return;
     }
     tradeMonitor.removeTrade(trade.tradeId);
+    tradeJournal.recordClose(trade.tradeId, closePrice, pnl, reason);
     riskManager.recordTradeClosed(pnl);
+    this.updatePair(trade.pair, { status: `Closed (${reason})` });
   }
 
   /** Close every open position at the current market price */

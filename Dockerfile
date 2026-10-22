@@ -20,12 +20,15 @@ ENV NODE_ENV=production \
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package*.json ./
+COPY public ./public
 
 RUN mkdir -p logs data && chown -R node:node /app
 USER node
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
-  CMD pgrep -f "node dist/index.js" > /dev/null || exit 1
+  CMD wget -qO- http://127.0.0.1:3000/healthz > /dev/null || exit 1
+
+EXPOSE 3000
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["node", "dist/index.js"]

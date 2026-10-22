@@ -10,6 +10,8 @@ services:
     environment:
       NODE_ENV: production
       TZ: Asia/Kolkata
+    ports:
+      - "3000:3000"
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data

@@ -54,6 +54,14 @@ export const config = {
   profitRatio: num(process.env.PROFIT_RATIO, 2),
   minWinRate: num(process.env.MIN_WIN_RATE, 0.7),
 
+  // Dashboard (web UI + JSON API)
+  dashboardEnabled: process.env.DASHBOARD_ENABLED !== 'false',
+  dashboardHost: process.env.DASHBOARD_HOST || '0.0.0.0',
+  dashboardPort: num(process.env.DASHBOARD_PORT, 3000),
+  dashboardUser: process.env.DASHBOARD_USER || '',
+  dashboardPassword: process.env.DASHBOARD_PASSWORD || '',
+  dataDir: process.env.DATA_DIR || './data',
+
   // Notifications
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   emailRecipient: process.env.EMAIL_RECIPIENT || '',

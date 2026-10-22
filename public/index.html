@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FundedNext Bot</title>
+<style>
+  :root {
+    --bg: #0a0e13;
+    --panel: #11171f;
+    --panel-2: #161e28;
+    --border: #1f2a37;
+    --text: #e6edf3;
+    --muted: #8593a3;
+    --green: #22c55e;
+    --green-bg: rgba(34, 197, 94, .12);
+    --red: #f05252;
+    --red-bg: rgba(240, 82, 82, .12);
+    --amber: #f5a524;
+    --amber-bg: rgba(245, 165, 36, .12);
+    --blue: #4c8dff;
+    --blue-bg: rgba(76, 141, 255, .12);
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .pos { color: var(--green); } .neg { color: var(--red); } .muted { color: var(--muted); }
+
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  .logo { width: 28px; height: 28px; border-radius: 7px; background: linear-gradient(135deg, var(--blue), var(--green)); }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; }
+  .badge { font-size: 11px; font-weight: 600; letter-spacing: .5px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
+  .badge.green { color: var(--green); background: var(--green-bg); border-color: transparent; }
+  .badge.red { color: var(--red); background: var(--red-bg); border-color: transparent; }
+  .badge.amber { color: var(--amber); background: var(--amber-bg); border-color: transparent; }
+  .badge.blue { color: var(--blue); background: var(--blue-bg); border-color: transparent; }
+  .clock { text-align: right; }
+  .clock .t { font-size: 20px; font-weight: 600; }
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
+  .dot.bad { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
+
+  .notice { padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(245,165,36,.25); }
+  .notice.hidden { display: none; }
+
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; min-width: 0; }
+  .card h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .kpi .v { font-size: 26px; font-weight: 600; }
+  .kpi .s { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .meter { position: relative; height: 8px; background: var(--panel-2); border-radius: 999px; margin-top: 12px; overflow: visible; }
+  .meter .fill { height: 100%; border-radius: 999px; background: var(--green); width: 0; transition: width .4s; }
+  .meter .mark { position: absolute; top: -4px; width: 2px; height: 16px; background: var(--amber); }
+
+  .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .full { margin-bottom: 12px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.r, th.r { text-align: right; }
+  .side { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+  .side.BUY { color: var(--green); background: var(--green-bg); }
+  .side.SELL { color: var(--red); background: var(--red-bg); }
+  .status { color: var(--muted); white-space: normal; min-width: 160px; }
+  .empty { color: var(--muted); text-align: center; padding: 22px 8px; }
+
+  #equity { width: 100%; height: 200px; display: block; }
+  .log { font-family: var(--mono); font-size: 12px; max-height: 320px; overflow-y: auto; }
+  .log div { padding: 4px 0; border-bottom: 1px dashed var(--border); display: grid; grid-template-columns: 64px 46px 1fr; gap: 8px; }
+  .log .lv-WARN { color: var(--amber); } .log .lv-ERROR { color: var(--red); } .log .lv-INFO { color: var(--muted); }
+  .log .msg { overflow-wrap: anywhere; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 8px 0 20px; }
+
+  @media (max-width: 960px) {
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    .kpis { grid-template-columns: 1fr; }
+    .clock { text-align: left; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div>
+        <h1>FundedNext Trading Bot</h1>
+        <div class="badges" id="badges"></div>
+      </div>
+    </div>
+    <div class="clock">
+      <div class="t num" id="clock">--:--</div>
+      <div class="conn"><span class="dot" id="connDot"></span><span id="connText">Connecting…</span></div>
+    </div>
+  </header>
+
+  <div class="notice hidden" id="notice"></div>
+
+  <section class="kpis">
+    <div class="card kpi">
+      <h2>Today P&amp;L</h2>
+      <div class="v num" id="kToday">—</div>
+      <div class="s" id="kTodaySub">—</div>
+    </div>
+    <div class="card kpi">
+      <h2>Trades today</h2>
+      <div class="v num" id="kTrades">—</div>
+      <div class="s" id="kTradesSub">—</div>
+    </div>
+    <div class="card kpi">
+      <h2>Daily loss used <span class="num" id="kLossPct"></span></h2>
+      <div class="v num" id="kLoss">—</div>
+      <div class="meter"><div class="fill" id="lossFill"></div><div class="mark" id="lossMark" title="Safety buffer"></div></div>
+      <div class="s" id="kLossSub">—</div>
+    </div>
+    <div class="card kpi">
+      <h2>All-time</h2>
+      <div class="v num" id="kTotal">—</div>
+      <div class="s" id="kTotalSub">—</div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Market watch <span class="muted" id="sessionInfo"></span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Pair</th><th class="r">Bid</th><th class="r">Ask</th><th class="r">Spread</th><th class="r">Prev high</th><th class="r">Prev low</th><th class="r">ATR</th><th>Status</th></tr></thead>
+          <tbody id="market"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Equity curve <span class="muted">realized P&amp;L</span></h2>
+      <svg id="equity" viewBox="0 0 600 200" preserveAspectRatio="none" role="img" aria-label="Equity curve"></svg>
+    </div>
+  </section>
+
+  <section class="card full">
+    <h2>Open positions <span class="num" id="openCount"></span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Pair</th><th>Side</th><th class="r">Entry</th><th class="r">Current</th><th class="r">Stop loss</th><th class="r">Take profit</th><th class="r">Lots</th><th class="r">P&amp;L</th><th class="r">Opened</th></tr></thead>
+        <tbody id="open"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Trade history <span class="muted">last 50</span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Closed</th><th>Pair</th><th>Side</th><th class="r">Entry</th><th class="r">Exit</th><th>Reason</th><th class="r">P&amp;L</th></tr></thead>
+          <tbody id="history"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Activity</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </section>
+
+  <footer>Auto-refresh every 3s · <span id="footer"></span></footer>
+</div>
+
+<script>
+(function () {
+  const REFRESH_MS = 3000;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const digits = (pair) => (pair === 'XAUUSD' ? 2 : 5);
+  const px = (pair, v) => (v === null || v === undefined ? '—' : Number(v).toFixed(digits(pair)));
+  const money = (v) => {
+    const n = Number(v) || 0;
+    const sign = n > 0 ? '+' : n < 0 ? '−' : '';
+    return sign + '$' + Math.abs(n).toFixed(2);
+  };
+  const cls = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : '');
+  let tz = 'Asia/Kolkata';
+  const time = (iso) => (iso ? new Date(iso).toLocaleTimeString('en-IN', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
+  const dateTime = (iso) => (iso ? new Date(iso).toLocaleString('en-IN', { timeZone: tz, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
+  let lastOk = 0;
+
+  function badge(text, color) { return '<span class="badge ' + color + '">' + esc(text) + '</span>'; }
+
+  function render(d) {
+    tz = d.clock.timezone || tz;
+    $('clock').textContent = d.clock.time + ' IST';
+
+    const bot = d.bot;
+    const botBadge = !bot.enabled ? badge('BOT DISABLED', 'red') : bot.running ? badge('BOT RUNNING', 'green') : badge('BOT STOPPED', 'red');
+    $('badges').innerHTML = botBadge +
+      badge(d.mode, d.mode === 'LIVE' ? 'red' : 'blue') +
+      badge('DATA: ' + d.dataSource, d.dataSource === 'LIVE' ? 'green' : 'amber') +
+      badge(d.session.open ? 'SESSION OPEN' : 'SESSION CLOSED', d.session.open ? 'green' : '');
+
+    const notice = $('notice');
+    if (d.dataSource === 'SIMULATED') {
+      notice.textContent = 'Simulated market data — prices are not real and all trades are paper trades. P&L here does not reflect strategy performance.';
+      notice.classList.remove('hidden');
+    } else { notice.classList.add('hidden'); }
+
+    // KPIs
+    const realized = d.risk.dailyLossAmount;
+    const unreal = d.unrealizedPnL;
+    const today = realized + unreal;
+    $('kToday').textContent = money(today);
+    $('kToday').className = 'v num ' + cls(today);
+    $('kTodaySub').textContent = 'Realized ' + money(realized) + ' · Open ' + money(unreal);
+
+    $('kTrades').textContent = d.risk.tradesExecuted + ' / ' + d.limits.maxTradesPerDay;
+    $('kTradesSub').textContent = 'W ' + d.risk.wins + ' · L ' + d.risk.losses + ' · Risk $' + d.limits.riskPerTrade + '/trade';
+
+    const loss = Math.max(0, -today);
+    const pct = Math.min(100, (loss / d.limits.maxDailyLoss) * 100);
+    $('kLoss').textContent = '$' + loss.toFixed(2) + ' / $' + d.limits.maxDailyLoss;
+    $('kLossPct').textContent = pct.toFixed(0) + '%';
+    const fill = $('lossFill');
+    fill.style.width = pct + '%';
+    fill.style.background = loss >= d.limits.safetyBuffer ? 'var(--red)' : pct > 40 ? 'var(--amber)' : 'var(--green)';
+    $('lossMark').style.left = 'calc(' + (d.limits.safetyBuffer / d.limits.maxDailyLoss) * 100 + '% - 1px)';
+    $('kLossSub').textContent = d.risk.safetyBufferHit
+      ? 'Safety buffer hit — no new trades today'
+      : 'Stops new trades at $' + d.limits.safetyBuffer;
+
+    const s = d.summary;
+    $('kTotal').textContent = money(s.totalPnL);
+    $('kTotal').className = 'v num ' + cls(s.totalPnL);
+    $('kTotalSub').textContent = s.totalTrades + ' trades · Win rate ' + s.winRate + '%';
+
+    // Market watch
+    $('sessionInfo').textContent = d.session.opens + '–' + d.session.closes + ' IST · ' + d.session.days;
+    $('market').innerHTML = bot.pairs.map((p) =>
+      '<tr><td><b>' + esc(p.pair) + '</b></td>' +
+      '<td class="r num">' + px(p.pair, p.bid) + '</td>' +
+      '<td class="r num">' + px(p.pair, p.ask) + '</td>' +
+      '<td class="r num">' + (p.spreadPips ?? '—') + '</td>' +
+      '<td class="r num">' + px(p.pair, p.prevHigh) + '</td>' +
+      '<td class="r num">' + px(p.pair, p.prevLow) + '</td>' +
+      '<td class="r num">' + (p.atrPips ?? '—') + '</td>' +
+      '<td class="status">' + esc(p.status) + '</td></tr>'
+    ).join('');
+
+    // Open positions
+    $('openCount').textContent = d.openTrades.length ? '(' + d.openTrades.length + ')' : '';
+    $('open').innerHTML = d.openTrades.length ? d.openTrades.map((t) =>
+      '<tr><td><b>' + esc(t.pair) + '</b></td>' +
+      '<td><span class="side ' + esc(t.type) + '">' + esc(t.type) + '</span></td>' +
+      '<td class="r num">' + px(t.pair, t.entryPrice) + '</td>' +
+      '<td class="r num">' + px(t.pair, t.currentPrice) + '</td>' +
+      '<td class="r num">' + px(t.pair, t.stopLoss) + '</td>' +
+      '<td class="r num">' + px(t.pair, t.takeProfit) + '</td>' +
+      '<td class="r num">' + Number(t.lots).toFixed(2) + '</td>' +
+      '<td class="r num ' + cls(t.pnl) + '">' + money(t.pnl) + '</td>' +
+      '<td class="r num">' + time(t.openedAt) + '</td></tr>'
+    ).join('') : '<tr><td colspan="9" class="empty">No open positions</td></tr>';
+
+    // History
+    $('history').innerHTML = d.history.length ? d.history.map((t) =>
+      '<tr><td class="num">' + dateTime(t.closedAt) + '</td>' +
+      '<td><b>' + esc(t.pair) + '</b></td>' +
+      '<td><span class="side ' + esc(t.type) + '">' + esc(t.type) + '</span></td>' +
+      '<td class="r num">' + px(t.pair, t.entryPrice) + '</td>' +
+      '<td class="r num">' + px(t.pair, t.exitPrice) + '</td>' +
+      '<td class="muted">' + esc(String(t.reason).replace(/_/g, ' ').toLowerCase()) + '</td>' +
+      '<td class="r num ' + cls(t.pnl) + '">' + money(t.pnl) + '</td></tr>'
+    ).join('') : '<tr><td colspan="7" class="empty">No closed trades yet</td></tr>';
+
+    renderEquity(d.equity);
+
+    // Activity
+    $('log').innerHTML = d.logs.length ? d.logs.map((l) =>
+      '<div><span class="muted">' + time(l.time) + '</span><span class="lv-' + esc(l.level) + '">' + esc(l.level) + '</span><span class="msg">' + esc(l.message) + '</span></div>'
+    ).join('') : '<div class="empty">No activity yet</div>';
+
+    $('footer').textContent = 'Cycle #' + bot.cycle + (bot.startedAt ? ' · Up since ' + dateTime(bot.startedAt) : '');
+  }
+
+  function renderEquity(points) {
+    const svg = $('equity');
+    const W = 600, H = 200, P = 14;
+    if (!points.length) {
+      svg.innerHTML = '<text x="300" y="104" text-anchor="middle" fill="#8593a3" font-size="13">No closed trades yet</text>';
+      return;
+    }
+    const values = [0].concat(points.map((p) => p.equity));
+    const min = Math.min(0, ...values), max = Math.max(0, ...values);
+    const span = max - min || 1;
+    const x = (i) => P + (i / (values.length - 1 || 1)) * (W - 2 * P);
+    const y = (v) => H - P - ((v - min) / span) * (H - 2 * P);
+    const line = values.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+    const last = values[values.length - 1];
+    const color = last >= 0 ? '#22c55e' : '#f05252';
+    const area = 'M' + x(0) + ',' + y(0) + ' L' + line.split(' ').join(' L') + ' L' + x(values.length - 1) + ',' + y(0) + ' Z';
+    svg.innerHTML =
+      '<line x1="' + P + '" x2="' + (W - P) + '" y1="' + y(0) + '" y2="' + y(0) + '" stroke="#1f2a37" stroke-dasharray="4 4"/>' +
+      '<path d="' + area + '" fill="' + color + '" fill-opacity=".10"/>' +
+      '<polyline points="' + line + '" fill="none" stroke="' + color + '" stroke-width="2" vector-effect="non-scaling-stroke"/>' +
+      '<text x="' + (W - P) + '" y="' + (P + 4) + '" text-anchor="end" fill="' + color + '" font-size="13" font-family="monospace">' + money(last) + '</text>';
+  }
+
+  function setConn(ok, text) {
+    $('connDot').className = 'dot ' + (ok ? 'ok' : 'bad');
+    $('connText').textContent = text;
+  }
+
+  async function tick() {
+    try {
+      const res = await fetch('/api/status', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      render(await res.json());
+      lastOk = Date.now();
+      setConn(true, 'Live');
+    } catch (e) {
+      const ago = lastOk ? Math.round((Date.now() - lastOk) / 1000) + 's ago' : 'never';
+      setConn(false, 'Disconnected · last update ' + ago);
+    } finally {
+      setTimeout(tick, REFRESH_MS);
+    }
+  }
+  tick();
+})();
+</script>
+</body>
+</html>

@@ -47,6 +47,20 @@ export class RiskManager {
     };
   }
 
+  /** Restore today's counters after a restart (from the trade journal) */
+  restore(stats: { trades: number; realizedPnL: number; wins: number; losses: number }): void {
+    this.tradesExecutedToday = stats.trades;
+    this.dailyLossAmount = parseFloat(stats.realizedPnL.toFixed(2));
+    this.wins = stats.wins;
+    this.losses = stats.losses;
+    this.safetyBufferHit = this.dailyLossAmount <= -config.safetyBuffer;
+    if (stats.trades > 0) {
+      logger.info(
+        `♻️ Restored today's risk state: ${stats.trades} trade(s), realized $${this.dailyLossAmount.toFixed(2)}`
+      );
+    }
+  }
+
   recordTradeOpened(): void {
     this.tradesExecutedToday++;
     logger.info(`🧮 Trades today: ${this.tradesExecutedToday}/${config.maxTradesPerDay}`);

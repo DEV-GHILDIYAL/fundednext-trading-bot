@@ -20,6 +20,20 @@ const LEVEL_NAMES = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
 const COLORS = ['\x1b[36m', '\x1b[32m', '\x1b[33m', '\x1b[31m'];
 const RESET = '\x1b[0m';
 const MAX_LOG_BYTES = 10 * 1024 * 1024; // rotate bot.log at 10 MB
+const RECENT_LIMIT = 200;
+
+export interface LogEntry {
+  time: string;
+  level: string;
+  message: string;
+}
+
+const recentLogs: LogEntry[] = [];
+
+/** Most recent INFO/WARN/ERROR lines, newest first (for the dashboard) */
+export function getRecentLogs(limit: number = 50): LogEntry[] {
+  return recentLogs.slice(-limit).reverse();
+}
 
 function serialize(data: unknown): string {
   if (data === undefined) return '';
@@ -64,9 +78,16 @@ class Logger {
   private write(level: LogLevel, message: string, data?: unknown): void {
     if (level < this.currentLevel) return;
 
-    const line = `[${new Date().toISOString()}] [${LEVEL_NAMES[level]}] ${message}`;
+    const time = new Date().toISOString();
+    const line = `[${time}] [${LEVEL_NAMES[level]}] ${message}`;
     const extra = serialize(data);
     const output = extra ? `${line} ${extra}` : line;
+
+    if (level >= LogLevel.INFO) {
+      const text = extra ? `${message} ${extra}` : message;
+      recentLogs.push({ time, level: LEVEL_NAMES[level], message: text.slice(0, 400) });
+      if (recentLogs.length > RECENT_LIMIT) recentLogs.shift();
+    }
 
     if (level >= LogLevel.WARN) {
       console.error(`${COLORS[level]}${output}${RESET}`);

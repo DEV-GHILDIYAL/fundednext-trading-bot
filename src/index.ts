@@ -2,6 +2,9 @@ import { config } from './config';
 import { logger } from './utils/logger';
 import { bot } from './bot/bot';
 import { scheduler } from './bot/scheduler';
+import { dashboardServer } from './server/dashboardServer';
+import { riskManager } from './services/riskManager';
+import { tradeJournal } from './services/tradeJournal';
 import { getZonedTime, formatClock } from './utils/time';
 
 let shuttingDown = false;
@@ -18,6 +21,7 @@ async function shutdown(signal: string): Promise<void> {
     scheduler.stopAll();
     bot.stop();
     await bot.closeAllPositions('Process shutdown');
+    await dashboardServer.stop();
   } catch (error) {
     logger.error('Error during shutdown', error);
   }
@@ -45,7 +49,9 @@ async function main(): Promise<void> {
       `Max daily loss $${config.maxDailyLoss} | Max ${config.maxTradesPerDay} trades/day`
   );
 
+  riskManager.restore(tradeJournal.getTodayStats());
   scheduler.initialize();
+  dashboardServer.start();
 
   if (!config.botEnabled) {
     logger.warn('⚠️ BOT_ENABLED=false — trading loop not started. Set BOT_ENABLED=true in .env and restart.');
