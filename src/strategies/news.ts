@@ -137,6 +137,25 @@ export class NewsCalendar {
     this.fetchedAt = this.lastError ? Date.now() - 5.5 * 3600000 : Date.now();
   }
 
+  /** Events from 1 h ago to `hours` ahead (built-in + feed, de-duplicated), oldest first */
+  async upcoming(hours: number = 48, now: Date = new Date()): Promise<NewsEvent[]> {
+    await this.refresh();
+    const from = new Date(now.getTime() - 3600000);
+    const to = new Date(now.getTime() + hours * 3600000);
+    const all = [...this.feed, ...builtInEvents(from, to)].filter((e) => e.at >= from && e.at <= to);
+    const seen = new Set<string>();
+    return all
+      .sort((a, b) => a.at.getTime() - b.at.getTime())
+      .filter((e) => {
+        const key = `${e.at.getTime()}|${e.title.slice(0, 6).toLowerCase()}`;
+        // the feed and the built-in list both have NFP / FOMC at the same minute
+        const dupe = [...seen].some((k) => k.startsWith(`${e.at.getTime()}|`) && /payroll|fomc|federal|non-farm/i.test(e.title));
+        if (seen.has(key) || dupe) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
   async check(utc: Date = new Date()): Promise<string | null> {
     await this.refresh();
     const events = [...builtInEvents(new Date(utc.getTime() - 86400000), new Date(utc.getTime() + 86400000)), ...this.feed];

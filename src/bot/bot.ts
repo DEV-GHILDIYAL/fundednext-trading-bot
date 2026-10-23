@@ -42,6 +42,14 @@ export interface BotSnapshot {
   lastCycleAt: string | null;
   dataFeedOk: boolean;
   pairs: PairSnapshot[];
+  strategies: SleeveSnapshot[];
+}
+
+export interface SleeveSnapshot {
+  id: string;
+  status: string;
+  updatedAt: string | null;
+  lastSignal: { side: string; at: string; verdict: string; reason: string } | null;
 }
 
 type AiVerdict = 'approved' | 'rejected' | 'unavailable';
@@ -59,6 +67,7 @@ export class TradingBot {
   /** Last closed candle already evaluated per pair (one decision per 1H candle) */
   private evaluatedCandle = new Map<string, string>();
   private lastRiskReason = '';
+  private sleeveStatus = new Map<string, SleeveSnapshot>();
   private pairStatus = new Map<string, PairSnapshot>(
     PAIR_LIST.map((pair) => [
       pair,
@@ -103,6 +112,9 @@ export class TradingBot {
       lastCycleAt: this.lastCycleAt?.toISOString() ?? null,
       dataFeedOk: this.feedOk,
       pairs: Array.from(this.pairStatus.values()).map((p) => ({ ...p })),
+      strategies: config.sleeves.map(
+        (sl) => this.sleeveStatus.get(sl.id) ?? { id: sl.id, status: 'Waiting for its session', updatedAt: null, lastSignal: null }
+      ),
     };
   }
 
@@ -294,7 +306,20 @@ export class TradingBot {
 
   /** Evaluate one portfolio strategy on its own timeframe; true when a trade was opened */
   private async scanSleeve(pair: TradingPair, price: PriceData, sleeve: Sleeve, statuses: string[], openSide?: 'BUY' | 'SELL'): Promise<boolean> {
-    const status = (text: string) => statuses.push(config.sleeves.length > 1 ? `${sleeve.id}: ${text}` : text);
+    const status = (text: string) => {
+      statuses.push(config.sleeves.length > 1 ? `${sleeve.id}: ${text}` : text);
+      const prev = this.sleeveStatus.get(sleeve.id);
+      this.sleeveStatus.set(sleeve.id, { id: sleeve.id, status: text, updatedAt: new Date().toISOString(), lastSignal: prev?.lastSignal ?? null });
+    };
+    const signalSeen = (verdict: string, side: string, reason: string) => {
+      const prev = this.sleeveStatus.get(sleeve.id);
+      this.sleeveStatus.set(sleeve.id, {
+        id: sleeve.id,
+        status: prev?.status ?? '',
+        updatedAt: new Date().toISOString(),
+        lastSignal: { side, at: new Date().toISOString(), verdict, reason },
+      });
+    };
     const params = { ...defaultStrategyParams(), rangeBars: rangeBarsFor(sleeve.timeframe), rewardRatio: sleeve.rewardRatio };
     const useLibrary = sleeve.strategy !== 'breakout';
     const needed = useLibrary ? INDICATOR_WARMUP + 5 : minClosedCandles(params.rangeBars);
@@ -360,6 +385,7 @@ export class TradingBot {
       confidence: review.confidence,
       reasoning: review.reasoning,
     };
+    if (verdict !== 'unavailable') signalSeen(verdict, signal.signal, signal.reasoning);
     if (verdict === 'unavailable') {
       // Fail-closed: no trade now; retried next cycle while still inside the entry window
       status('AI review unavailable — trade skipped (retrying)');
@@ -404,6 +430,7 @@ export class TradingBot {
     tradeJournal.recordOpen(trade);
     riskManager.recordTradeOpened();
     this.updatePair(pair, { status: `${trade.type} opened [${sleeve.id}]` });
+    status(`${trade.type} opened @ ${trade.entryPrice}`);
     void notifier.notify(
       'info',
       `${tradeExecutor.isDryRun ? '[PAPER] ' : ''}${trade.type} ${result.lots} lot ${pair} @ ${trade.entryPrice} [${sleeve.id}]\n` +

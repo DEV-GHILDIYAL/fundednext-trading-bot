@@ -97,3 +97,14 @@ export function formatClock(t: ZonedTime): string {
 export function isAnySleeveInSession(date: Date = new Date()): boolean {
   return config.sleeves.some((s) => isWithinTradingSession(date, s.sessionStart, s.sessionEnd));
 }
+
+/** A session-timezone (London) clock time expressed in the display timezone today, e.g. 08:00 London → "13:30" IST */
+export function sessionClockInDisplayZone(minutes: number, now: Date = new Date()): string {
+  const target = minutes % (24 * 60);
+  const base = Math.floor(now.getTime() / 300000) * 300000; // 5-minute aligned so the scan hits HH:M0/M5
+  for (let m = -12 * 60; m <= 36 * 60; m += 5) {
+    const d = new Date(base + m * 60000);
+    if (getZonedTime(d, config.sessionTimezone).minutesOfDay === target) return formatClock(getZonedTime(d));
+  }
+  return formatMinutes(minutes);
+}
