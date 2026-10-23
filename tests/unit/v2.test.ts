@@ -324,8 +324,8 @@ describe('Strategy library: educator strategies', () => {
       return { timestamp: new Date(start + k * 3600e3), open: base, high: base + 4, low: base - 4, close: base + 1, closed: true };
     });
 
-  it('exposes all 14 strategies', () => {
-    expect(STRATEGY_NAMES).toHaveLength(14);
+  it('exposes all 15 strategies', () => {
+    expect(STRATEGY_NAMES).toHaveLength(15);
   });
 
   it('turtle20 buys the first close above the 20-bar high with a 2×ATR stop', () => {
@@ -387,5 +387,45 @@ describe('Supertrend EA', () => {
     const a = adx(mk(Array.from({ length: 80 }, (_, k) => 4000 + k * 2)), 14);
     expect(a.adx[79]).toBeGreaterThan(22);
     expect(a.pdi[79]).toBeGreaterThan(a.mdi[79]);
+  });
+});
+
+describe('XAUUSD EMA Breakout EA (emaRangeBreakout)', () => {
+  const { computeIndicators } = jest.requireActual('../../src/strategies/indicators');
+  const { evaluateStrategy, isSignal } = jest.requireActual('../../src/strategies/library');
+  // 5-minute bars on a server-time Monday, last bar closes at 10:00 server (inside 8–12)
+  const bars = (lastClose: number, hourOfLastOpen = 9, minuteOfLastOpen = 55): CandleData[] => {
+    const end = Date.UTC(2026, 0, 5, hourOfLastOpen, minuteOfLastOpen);
+    return Array.from({ length: 40 }, (_, k) => {
+      const t = new Date(end - (39 - k) * 300e3);
+      const last = k === 39;
+      const o = 4000;
+      return { timestamp: t, open: o, high: last ? Math.max(o, lastClose) + 0.5 : 4003, low: last ? Math.min(o, lastClose) - 0.5 : 3997, close: last ? lastClose : 4001, closed: true };
+    });
+  };
+  const run = (c: CandleData[], htfDir: number | undefined) => {
+    const i = c.length - 1;
+    return evaluateStrategy('emaRangeBreakout', {
+      pair: 'XAUUSD', candles: c, i, ind: computeIndicators(c),
+      quote: { pair: 'XAUUSD', bid: c[i].close, ask: c[i].close + 0.3, spread: 3, timestamp: new Date() },
+      tfMinutes: 5, rewardRatio: 2, slMinAtr: 0.5, slMaxAtr: 2, minAtrPips: 10, maxSpreadPips: 8,
+      breakout: { ...params }, toUtc: (d: Date) => d, htfDir,
+    });
+  };
+
+  it('buys a close above the 10-bar high when the HTF is above EMA200, SL below range − 0.5 ATR, TP 2R', () => {
+    const c = bars(4006);
+    const r = run(c, 1);
+    expect(isSignal(r)).toBe(true);
+    if (isSignal(r)) {
+      expect(r.side).toBe('BUY');
+      expect(r.stopLoss).toBeLessThan(3997);
+      expect(r.takeProfit - r.entryPrice).toBeCloseTo(2 * (r.entryPrice - r.stopLoss), 1);
+    }
+  });
+
+  it('ignores breakouts against the HTF trend and outside server sessions', () => {
+    expect(isSignal(run(bars(4006), -1))).toBe(false);
+    expect(isSignal(run(bars(4006, 12, 30), 1))).toBe(false); // 12:35 server → between sessions
   });
 });

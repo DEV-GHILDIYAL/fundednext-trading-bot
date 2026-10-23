@@ -18,6 +18,8 @@
  *   casperSmc      Casper SMC continuation: NY 07:30–10:30, liquidity taken → pullback → displacement (ChoCH)
  *   supertrend     SupertrendGold Prop EA: ST(10,3) direction + ADX≥22 + ≤2 flips/30 bars + higher-TF ST agrees;
  *                  SL = ST line ± $3.5, NO fixed TP — exit when a candle closes beyond the line (trailing)
+ *   emaRangeBreakout XAUUSD EMA Breakout EA: higher-TF close vs EMA200 trend, entry-TF close beyond the
+ *                  previous 10 candles' range, SL = other side of range ± 0.5 ATR, TP = R × SL; server hours 8–12, 14–19
  *
  * Every strategy: stop distance clamped to [slMinAtr, slMaxAtr] × ATR, TP = rewardRatio × stop.
  */
@@ -42,6 +44,7 @@ export const STRATEGY_NAMES = [
   'ictSilverBullet',
   'casperSmc',
   'supertrend',
+  'emaRangeBreakout',
 ] as const;
 export type StrategyName = (typeof STRATEGY_NAMES)[number];
 
@@ -68,7 +71,10 @@ export interface LibContext {
   breakout: StrategyParams;
   /** Bar timestamps → real UTC (MT5 bars carry broker server time) */
   toUtc: (d: Date) => Date;
-  /** Supertrend direction on the higher timeframe at this bar (supertrend strategy) */
+  /**
+   * Higher-timeframe trend at this bar: supertrend → HTF Supertrend direction,
+   * emaRangeBreakout → sign of (last closed HTF close − HTF EMA200)
+   */
   htfDir?: number;
 }
 
@@ -498,6 +504,64 @@ function supertrendEa(ctx: LibContext): LibResult {
   };
 }
 
+/** XAUUSD EMA Breakout EA settings (defaults of the user's MQL5 EA v1.00) */
+export const EMA_RANGE_EA = {
+  rangeBars: 10,
+  atrBufferMult: 0.5,
+  sessions: [
+    [8, 12],
+    [14, 19],
+  ] as const, // broker server hours
+};
+
+/** Strategies that need a higher-timeframe trend (htfDir) and which timeframe that is */
+export const HTF_FOR: Partial<Record<StrategyName, Partial<Record<string, string>>>> = {
+  supertrend: { M15: 'H1', M30: 'H1', H1: 'H4' },
+  emaRangeBreakout: { M5: 'M15', M15: 'H1', M30: 'H1', H1: 'H4' },
+};
+
+/** XAUUSD EMA Breakout EA: HTF EMA200 trend + close beyond the previous N candles' range */
+function emaRangeBreakout(ctx: LibContext): LibResult {
+  const { candles: c, i, ind } = ctx;
+  const E = EMA_RANGE_EA;
+  if (i < E.rangeBars + 2) return skip('Not enough candles');
+  const entryAt = new Date(c[i].timestamp.getTime() + ctx.tfMinutes * 60000); // server time
+  const h = entryAt.getUTCHours();
+  if (!E.sessions.some(([s, e]) => h >= s && h < e)) return skip('Outside EA sessions (server 8–12, 14–19)');
+  if (ctx.htfDir === undefined) return skip('Higher-timeframe EMA200 trend not available');
+  if (ctx.htfDir === 0) return skip('HTF close equals EMA200');
+
+  let hi = -Infinity;
+  let lo = Infinity;
+  for (let j = i - E.rangeBars; j < i; j++) {
+    hi = Math.max(hi, c[j].high);
+    lo = Math.min(lo, c[j].low);
+  }
+  const a = ind.atr14[i];
+  if (!Number.isFinite(a) || a <= 0) return skip('ATR not ready');
+  const buffer = a * E.atrBufferMult;
+  const spread = ctx.quote.ask - ctx.quote.bid;
+
+  let side: 'BUY' | 'SELL' | null = null;
+  if (ctx.htfDir === 1 && c[i].close > hi) side = 'BUY';
+  if (ctx.htfDir === -1 && c[i].close < lo) side = 'SELL';
+  if (!side) return skip('No range breakout with the HTF trend');
+
+  const entry = side === 'BUY' ? ctx.quote.ask : ctx.quote.bid;
+  const sl = side === 'BUY' ? lo - buffer : hi + buffer + spread;
+  if (side === 'BUY' ? sl >= entry : sl <= entry) return skip('SL on the wrong side of entry');
+  const dist = Math.abs(entry - sl);
+  const tp = side === 'BUY' ? entry + ctx.rewardRatio * dist : entry - ctx.rewardRatio * dist;
+  return {
+    side,
+    entryPrice: round(ctx.pair, entry),
+    stopLoss: round(ctx.pair, sl),
+    takeProfit: round(ctx.pair, tp),
+    reason: `HTF ${side === 'BUY' ? 'above' : 'below'} EMA200, close beyond ${E.rangeBars}-bar range ${lo}–${hi}`,
+    exit: 'fixed',
+  };
+}
+
 const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   breakout,
   trendPullback,
@@ -513,10 +577,11 @@ const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   ictSilverBullet,
   casperSmc,
   supertrend: supertrendEa,
+  emaRangeBreakout,
 };
 
 export function evaluateStrategy(name: StrategyName, ctx: LibContext): LibResult {
-  if (name === 'supertrend') {
+  if (name === 'supertrend' || name === 'emaRangeBreakout') {
     // EA has its own filters (ADX, flips, distance); only the spread check is shared
     if (ctx.quote.spread > ctx.maxSpreadPips) return skip(`Spread ${ctx.quote.spread} > max ${ctx.maxSpreadPips} pips`);
     return IMPL[name](ctx);

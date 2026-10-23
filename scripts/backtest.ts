@@ -4,7 +4,7 @@
  *   npm run backtest                      # strategy/settings from .env
  *   npm run backtest -- --strategies      # every strategy × timeframe × session × R:R, ranked
  *   npm run backtest -- --strategies --only asianBreakout,turtle20   # just some strategies
- *   npm run backtest -- --bars 5000       # H1 history length (M30/M15 always use 10000 bars)
+ *   npm run backtest -- --bars 5000       # H1 history length (M5/M15/M30/H4/D1 always use 10000 bars)
  *   npm run backtest -- --source sim      # offline smoke test (random-walk feed)
  *
  * Same signal code as the live bot (src/strategies/library.ts). Fill = next candle open + spread.
@@ -16,7 +16,7 @@ import { config, EntryTimeframe, TIMEFRAME_MINUTES } from '../src/config';
 import { createMarketDataSource, CandleData, MarketDataSource } from '../src/api/market';
 import { defaultStrategyParams, rangeBarsFor } from '../src/strategies/entrySignalGenerator';
 import { computeIndicators, Indicators, INDICATOR_WARMUP } from '../src/strategies/indicators';
-import { evaluateStrategy, isSignal, StrategyName, STRATEGY_NAMES, SUPERTREND_EA } from '../src/strategies/library';
+import { evaluateStrategy, isSignal, StrategyName, STRATEGY_NAMES, SUPERTREND_EA, HTF_FOR } from '../src/strategies/library';
 import { getPairSpec, PAIR_LIST } from '../src/constants/pairs';
 import { isWithinTradingSession, getZonedTime, formatMinutes } from '../src/utils/time';
 
@@ -77,13 +77,15 @@ const GRID: Record<StrategyName, { tfs: EntryTimeframe[]; sessions: Session[]; r
   casperSmc: { tfs: ['M15'], sessions: [SESSIONS.Any], rr: [3, 4] },
   // rr 0 = no fixed target (trailing exit)
   supertrend: { tfs: ['M15', 'M30', 'H1'], sessions: [SESSIONS.Any], rr: [0] },
+  // EA uses its own server-time sessions (8–12, 14–19)
+  emaRangeBreakout: { tfs: ['M5', 'M15', 'M30'], sessions: [SESSIONS.Any], rr: [1.5, 2] },
 };
 
-/** Higher timeframe used for the Supertrend agreement filter */
-const HTF_OF: Partial<Record<EntryTimeframe, EntryTimeframe>> = { M15: 'H1', M30: 'H1', H1: 'H4' };
+const htfOf = (strategy: StrategyName, tf: EntryTimeframe): EntryTimeframe | undefined =>
+  HTF_FOR[strategy]?.[tf] as EntryTimeframe | undefined;
 
-/** Higher-timeframe Supertrend direction known at each entry candle's close */
-function mapHtfDir(ds: Dataset, tf: EntryTimeframe, htf: Dataset, htfTf: EntryTimeframe): number[] {
+/** Higher-timeframe trend known at each entry candle's close (last CLOSED higher-TF candle) */
+function mapHtfDir(strategy: StrategyName, ds: Dataset, tf: EntryTimeframe, htf: Dataset, htfTf: EntryTimeframe): number[] {
   const out = new Array<number>(ds.candles.length).fill(0);
   const tfMs = TIMEFRAME_MINUTES[tf] * 60000;
   const htfMs = TIMEFRAME_MINUTES[htfTf] * 60000;
@@ -91,7 +93,13 @@ function mapHtfDir(ds: Dataset, tf: EntryTimeframe, htf: Dataset, htfTf: EntryTi
   for (let i = 0; i < ds.candles.length; i++) {
     const closeAt = ds.candles[i].timestamp.getTime() + tfMs;
     while (j + 1 < htf.candles.length && htf.candles[j + 1].timestamp.getTime() + htfMs <= closeAt) j++;
-    out[i] = j >= 0 ? htf.ind.stDir[j] : 0;
+    if (j < 0) continue;
+    if (strategy === 'supertrend') out[i] = htf.ind.stDir[j];
+    else {
+      const e = htf.ind.ema200[j];
+      const cl = htf.candles[j].close;
+      out[i] = Number.isFinite(e) ? Math.sign(cl - e) : 0;
+    }
   }
   return out;
 }
@@ -263,11 +271,11 @@ async function main(): Promise<void> {
   const timeframes: EntryTimeframe[] = matrix
     ? Array.from(new Set(names.flatMap((n) => GRID[n].tfs)))
     : [config.entryTimeframe];
-  // higher timeframes needed by the Supertrend filter
-  if ((matrix && names.includes('supertrend')) || (!matrix && config.strategy === 'supertrend')) {
-    const extra = (matrix ? GRID.supertrend.tfs : [config.entryTimeframe]).map((tf) => HTF_OF[tf]).filter((x): x is EntryTimeframe => !!x);
-    for (const tf of extra) if (!timeframes.includes(tf)) timeframes.push(tf);
-  }
+  // higher timeframes needed by HTF-filtered strategies (supertrend, emaRangeBreakout)
+  const htfNeeds = matrix
+    ? names.flatMap((n) => GRID[n].tfs.map((tf) => htfOf(n, tf)))
+    : [htfOf(config.strategy, config.entryTimeframe)];
+  for (const tf of htfNeeds) if (tf && !timeframes.includes(tf)) timeframes.push(tf);
   const datasets = new Map<EntryTimeframe, Dataset>();
   for (const tf of timeframes) {
     datasets.set(tf, await loadDataset(market, tf, tf === 'H1' ? bars : 10000));
@@ -293,18 +301,18 @@ async function main(): Promise<void> {
 
   const rows = variants.map((v) => {
     const ds = datasets.get(v.timeframe)!;
-    const htfTf = v.strategy === 'supertrend' ? HTF_OF[v.timeframe] : undefined;
-    const htfDir = htfTf && datasets.has(htfTf) ? mapHtfDir(ds, v.timeframe, datasets.get(htfTf)!, htfTf) : undefined;
+    const htfTf = htfOf(v.strategy, v.timeframe);
+    const htfDir = htfTf && datasets.has(htfTf) ? mapHtfDir(v.strategy, ds, v.timeframe, datasets.get(htfTf)!, htfTf) : undefined;
     const trades = runBacktest(ds, v, spread, offsetMs, htfDir);
     return { v, ds, trades, s: summarize(trades, ds) };
   });
 
   const header =
-    'Strategy'.padEnd(16) + 'TF'.padEnd(5) + 'Session'.padEnd(8) + 'RR'.padStart(4) + 'Wks'.padStart(5) + 'Trd'.padStart(5) +
+    'Strategy'.padEnd(18) + 'TF'.padEnd(5) + 'Session'.padEnd(8) + 'RR'.padStart(4) + 'Wks'.padStart(5) + 'Trd'.padStart(5) +
     '/wk'.padStart(5) + 'Win%'.padStart(6) + 'NetR'.padStart(7) + 'IS R'.padStart(7) + 'OOS R'.padStart(7) + 'PF'.padStart(6) +
     'DD R'.padStart(6) + 'LRun'.padStart(5) + 'P1 wk'.padStart(7) + 'P2 wk'.padStart(7);
   const line = (r: (typeof rows)[number]) =>
-    r.v.strategy.padEnd(16) + r.v.timeframe.padEnd(5) + r.v.session.name.padEnd(8) + (r.v.rewardRatio === 0 ? 'trl' : f(r.v.rewardRatio)).padStart(4) +
+    r.v.strategy.padEnd(18) + r.v.timeframe.padEnd(5) + r.v.session.name.padEnd(8) + (r.v.rewardRatio === 0 ? 'trl' : f(r.v.rewardRatio)).padStart(4) +
     f(r.ds.weeks, 0).padStart(5) + String(r.s.trades).padStart(5) + f(r.s.perWeek).padStart(5) + f(r.s.winRate, 0).padStart(6) +
     f(r.s.netR).padStart(7) + f(r.s.isR).padStart(7) + f(r.s.oosR).padStart(7) + f(r.s.pf, 2).padStart(6) + f(r.s.maxDd).padStart(6) +
     String(r.s.maxRun).padStart(5) + f(r.s.weeksP1, 0).padStart(7) + f(r.s.weeksP2, 0).padStart(7);

@@ -1,11 +1,11 @@
 import { logger } from '../utils/logger';
-import { config, TIMEFRAME_MINUTES } from '../config';
+import { config, TIMEFRAME_MINUTES, EntryTimeframe } from '../config';
 import { marketClient, PriceData, CandleData, computeAtrPips } from '../api/market';
 import { mt5Bridge } from '../api/mt5Bridge';
 import { groqClient, GroqUnavailableError } from '../api/groq';
 import { EntrySignalGenerator, TradeSignal, StrategyParams, defaultStrategyParams, minClosedCandles } from '../strategies/entrySignalGenerator';
 import { computeIndicators, INDICATOR_WARMUP } from '../strategies/indicators';
-import { evaluateStrategy, isSignal } from '../strategies/library';
+import { evaluateStrategy, isSignal, HTF_FOR } from '../strategies/library';
 import { tradeExecutor } from '../services/tradeExecutor';
 import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
 import { riskManager } from '../services/riskManager';
@@ -297,7 +297,7 @@ export class TradingBot {
     }
 
     const signal = useLibrary
-      ? this.librarySignal(pair, price, closed, params)
+      ? await this.librarySignal(pair, price, closed, params)
       : EntrySignalGenerator.generateTradeSignal({ pair, quote: price, candles: closed, atrPips, range }, params);
     if (signal.signal === 'SKIP') {
       // A wide spread can be temporary: allow a re-check within the entry window
@@ -368,11 +368,31 @@ export class TradingBot {
     return (Date.now() - closeAt) / 60000;
   }
 
+  /**
+   * Higher-timeframe trend for strategies that need it (same definition as the backtest):
+   * supertrend → HTF Supertrend direction, emaRangeBreakout → sign(HTF close − EMA200),
+   * using the last HTF candle that had closed when the entry candle closed.
+   */
+  private async higherTimeframeTrend(pair: string, entryCandle: CandleData): Promise<number | undefined> {
+    const htfTf = HTF_FOR[config.strategy]?.[config.entryTimeframe] as EntryTimeframe | undefined;
+    if (!htfTf) return undefined;
+    const htf = (await marketClient.getCandles(pair, htfTf, INDICATOR_WARMUP + 30)).filter((c) => c.closed !== false);
+    const entryClose = entryCandle.timestamp.getTime() + TF_MS;
+    const htfMs = TIMEFRAME_MINUTES[htfTf] * 60000;
+    let j = htf.length - 1;
+    while (j >= 0 && htf[j].timestamp.getTime() + htfMs > entryClose) j--;
+    if (j < 0) return undefined;
+    const ind = computeIndicators(htf);
+    if (config.strategy === 'supertrend') return ind.stDir[j];
+    return Number.isFinite(ind.ema200[j]) ? Math.sign(htf[j].close - ind.ema200[j]) : undefined;
+  }
+
   /** Signal from the strategy library (STRATEGY other than breakout), as a TradeSignal */
-  private librarySignal(pair: string, quote: PriceData, closed: CandleData[], params: StrategyParams): TradeSignal {
+  private async librarySignal(pair: string, quote: PriceData, closed: CandleData[], params: StrategyParams): Promise<TradeSignal> {
     const i = closed.length - 1;
     const offset = this.serverOffsetMs(quote);
     const candleTime = closed[i].timestamp.toISOString();
+    const htfDir = await this.higherTimeframeTrend(pair, closed[i]);
     const r = evaluateStrategy(config.strategy, {
       pair,
       candles: closed,
@@ -388,6 +408,7 @@ export class TradingBot {
       maxSpreadPips: config.maxSpreadPips,
       breakout: params,
       toUtc: (d) => new Date(d.getTime() - offset),
+      htfDir,
     });
     if (!isSignal(r)) return EntrySignalGenerator.skipSignal(pair, r.skip, candleTime);
     if (r.exit === 'supertrend') {
