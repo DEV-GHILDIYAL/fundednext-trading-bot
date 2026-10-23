@@ -256,3 +256,53 @@ describe('Strategy params', () => {
     expect(noPa.signal).toBe('BUY');
   });
 });
+
+describe('Indicators', () => {
+  const { ema, rsi } = jest.requireActual('../../src/strategies/indicators');
+  it('EMA seeds with the SMA and follows the formula', () => {
+    const e = ema([1, 2, 3, 4, 5], 3);
+    expect(e[1]).toBeNaN();
+    expect(e[2]).toBeCloseTo(2);
+    expect(e[3]).toBeCloseTo(3); // 4*0.5 + 2*0.5
+    expect(e[4]).toBeCloseTo(4);
+  });
+  it('RSI is 100 on a straight rise and 0 on a straight fall', () => {
+    expect(rsi(Array.from({ length: 20 }, (_, i) => i), 14)[19]).toBe(100);
+    expect(rsi(Array.from({ length: 20 }, (_, i) => 20 - i), 14)[19]).toBeCloseTo(0);
+  });
+});
+
+describe('Strategy library: trendPullback', () => {
+  const { computeIndicators } = jest.requireActual('../../src/strategies/indicators');
+  const { evaluateStrategy, isSignal } = jest.requireActual('../../src/strategies/library');
+
+  it('buys a pullback to EMA20 in an uptrend and clamps the stop by ATR', () => {
+    const candles: CandleData[] = [];
+    const t0 = Date.UTC(2026, 0, 1);
+    let p = 3000;
+    for (let i = 0; i < 260; i++) {
+      p += 1.5; // steady uptrend
+      candles.push({ timestamp: new Date(t0 + i * 3600e3), open: p - 1, high: p + 3, low: p - 4, close: p, closed: true });
+    }
+    const ind0 = computeIndicators(candles);
+    const i = candles.length - 1;
+    // last candle dips to EMA20 and closes back above it (bullish)
+    const e20 = ind0.ema20[i - 1];
+    candles[i] = { ...candles[i], open: e20 + 1, low: e20 - 1, high: e20 + 8, close: e20 + 6 };
+    const ind = computeIndicators(candles);
+    const q = { pair: 'XAUUSD', bid: candles[i].close, ask: candles[i].close + 0.3, spread: 3, timestamp: new Date() };
+    const r = evaluateStrategy('trendPullback', {
+      pair: 'XAUUSD', candles, i, ind, quote: q, tfMinutes: 60, rewardRatio: 2, slMinAtr: 0.5, slMaxAtr: 1.5,
+      minAtrPips: 10, maxSpreadPips: 8, breakout: { ...params }, toUtc: (d: Date) => d,
+    });
+    expect(isSignal(r)).toBe(true);
+    if (isSignal(r)) {
+      expect(r.side).toBe('BUY');
+      const dist = r.entryPrice - r.stopLoss;
+      const a = ind.atr14[i];
+      expect(dist).toBeGreaterThanOrEqual(a * 0.5 - 0.01);
+      expect(dist).toBeLessThanOrEqual(a * 1.5 + 0.01);
+      expect(r.takeProfit - r.entryPrice).toBeCloseTo(dist * 2, 1);
+    }
+  });
+});

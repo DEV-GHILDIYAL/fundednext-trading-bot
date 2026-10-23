@@ -25,7 +25,13 @@ GitHub Actions CI/CD. Built as a DevOps portfolio project.
 
 Live orders on simulated prices are refused.
 
-## Strategy (summary — full rules in the project's `STRATEGY.md`)
+## Strategies
+
+`STRATEGY=` picks one from `src/strategies/library.ts` — the backtest and the live bot run the same code:
+`breakout` (default) · `trendPullback` · `asianBreakout` · `meanReversion` · `emaCross` · `donchian`.
+Compare them on real MT5 history: `npm run backtest -- --strategies` (ranked, with in-sample / out-of-sample split).
+
+### Breakout rules (summary — full rules in the project's `STRATEGY.md`)
 
 - **XAUUSD only**, London session **08:00–11:30 London time** (13:30–17:00 IST in winter, DST automatic)
 - Entry when a **closed 1H candle** closes beyond the last-24-candle range (or previous D1 with `RANGE_MODE=prevDay`),

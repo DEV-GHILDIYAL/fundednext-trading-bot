@@ -16,6 +16,14 @@ function parseClock(value: string | undefined, fallback: string): number {
 export type EntryTimeframe = 'M15' | 'M30' | 'H1';
 export const TIMEFRAME_MINUTES: Record<EntryTimeframe, number> = { M15: 15, M30: 30, H1: 60 };
 
+const STRATEGIES = ['breakout', 'trendPullback', 'asianBreakout', 'meanReversion', 'emaCross', 'donchian'] as const;
+export type StrategyKey = (typeof STRATEGIES)[number];
+
+function parseStrategy(value: string | undefined): StrategyKey {
+  const v = (value || 'breakout').trim();
+  return (STRATEGIES as readonly string[]).includes(v) ? (v as StrategyKey) : 'breakout';
+}
+
 function parseTimeframe(value: string | undefined): EntryTimeframe {
   const tf = (value || 'H1').toUpperCase();
   return tf === 'M15' || tf === 'M30' ? tf : 'H1';
@@ -115,6 +123,8 @@ export const config = {
   sessionEnd: parseClock(process.env.SESSION_END, '11:30'),
 
   // Strategy
+  // Which strategy from src/strategies/library.ts the bot trades
+  strategy: parseStrategy(process.env.STRATEGY),
   // Candle timeframe for entries: H1 (default), M30 or M15
   entryTimeframe: parseTimeframe(process.env.ENTRY_TIMEFRAME),
   // Breakout range length in hours (rolling mode)

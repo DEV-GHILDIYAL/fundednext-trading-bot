@@ -3,7 +3,9 @@ import { config, TIMEFRAME_MINUTES } from '../config';
 import { marketClient, PriceData, CandleData, computeAtrPips } from '../api/market';
 import { mt5Bridge } from '../api/mt5Bridge';
 import { groqClient, GroqUnavailableError } from '../api/groq';
-import { EntrySignalGenerator, TradeSignal, defaultStrategyParams, minClosedCandles } from '../strategies/entrySignalGenerator';
+import { EntrySignalGenerator, TradeSignal, StrategyParams, defaultStrategyParams, minClosedCandles } from '../strategies/entrySignalGenerator';
+import { computeIndicators, INDICATOR_WARMUP } from '../strategies/indicators';
+import { evaluateStrategy, isSignal } from '../strategies/library';
 import { tradeExecutor } from '../services/tradeExecutor';
 import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
 import { riskManager } from '../services/riskManager';
@@ -262,7 +264,8 @@ export class TradingBot {
     this.lastRiskReason = '';
 
     const params = defaultStrategyParams();
-    const needed = minClosedCandles(params.rangeBars);
+    const useLibrary = config.strategy !== 'breakout';
+    const needed = useLibrary ? INDICATOR_WARMUP + 5 : minClosedCandles(params.rangeBars);
     const candles = await marketClient.getCandles(pair, config.entryTimeframe, needed + 40);
     const closed = candles.filter((c) => c.closed !== false);
     if (closed.length < needed) {
@@ -293,7 +296,9 @@ export class TradingBot {
       return;
     }
 
-    const signal = EntrySignalGenerator.generateTradeSignal({ pair, quote: price, candles: closed, atrPips, range }, params);
+    const signal = useLibrary
+      ? this.librarySignal(pair, price, closed, params)
+      : EntrySignalGenerator.generateTradeSignal({ pair, quote: price, candles: closed, atrPips, range }, params);
     if (signal.signal === 'SKIP') {
       // A wide spread can be temporary: allow a re-check within the entry window
       if (!/^Skipped: Spread/.test(signal.reasoning)) this.evaluatedCandle.set(pair, candleKey);
@@ -350,15 +355,62 @@ export class TradingBot {
   }
 
   /** Minutes since the given closed candle closed (handles the MT5 server-time offset) */
+  /** MT5 bar/tick times are broker server time written as UTC; estimate the offset from the tick */
+  private serverOffsetMs(quote: PriceData): number {
+    if (marketClient.isSimulated) return 0;
+    const raw = quote.timestamp.getTime() - Date.now();
+    return Math.round(raw / (30 * 60 * 1000)) * 30 * 60 * 1000;
+  }
+
+  /** Minutes since the given closed candle closed */
   private candleCloseAgeMinutes(candle: CandleData, quote: PriceData): number {
-    let offsetMs = 0;
-    if (!marketClient.isSimulated) {
-      // MT5 bar/tick times are broker server time written as UTC; estimate the offset from the tick
-      const raw = quote.timestamp.getTime() - Date.now();
-      offsetMs = Math.round(raw / (30 * 60 * 1000)) * 30 * 60 * 1000;
-    }
-    const closeAt = candle.timestamp.getTime() + TF_MS - offsetMs;
+    const closeAt = candle.timestamp.getTime() + TF_MS - this.serverOffsetMs(quote);
     return (Date.now() - closeAt) / 60000;
+  }
+
+  /** Signal from the strategy library (STRATEGY other than breakout), as a TradeSignal */
+  private librarySignal(pair: string, quote: PriceData, closed: CandleData[], params: StrategyParams): TradeSignal {
+    const i = closed.length - 1;
+    const offset = this.serverOffsetMs(quote);
+    const candleTime = closed[i].timestamp.toISOString();
+    const r = evaluateStrategy(config.strategy, {
+      pair,
+      candles: closed,
+      i,
+      ind: computeIndicators(closed),
+      quote,
+      tfMinutes: TIMEFRAME_MINUTES[config.entryTimeframe],
+      rewardRatio: config.profitRatio,
+      slMinAtr: config.slMinAtr,
+      slMaxAtr: config.slMaxAtr,
+      minAtrPips: config.minAtrPips,
+      maxSpreadPips: config.maxSpreadPips,
+      breakout: params,
+      toUtc: (d) => new Date(d.getTime() - offset),
+    });
+    if (!isSignal(r)) return EntrySignalGenerator.skipSignal(pair, r.skip, candleTime);
+
+    const base = EntrySignalGenerator.skipSignal(pair, '', candleTime);
+    const dir = r.side === 'BUY' ? 'UP' : 'DOWN';
+    logger.info(`🎯 Signal ${r.side} ${pair} [${config.strategy}]`, { entry: r.entryPrice, sl: r.stopLoss, tp: r.takeProfit, candle: candleTime });
+    return {
+      ...base,
+      signal: r.side,
+      entryPrice: r.entryPrice,
+      stopLoss: r.stopLoss,
+      takeProfit: r.takeProfit,
+      riskRewardRatio: config.profitRatio,
+      confidence: 0.6,
+      reasoning: `[${config.strategy}] ${r.reason}`,
+      meta: {
+        rangeHigh: Math.max(...closed.slice(-25, -1).map((c) => c.high)),
+        rangeLow: Math.min(...closed.slice(-25, -1).map((c) => c.low)),
+        atrPips: computeAtrPips(closed, getPairSpec(pair).pipSize, 14),
+        spreadPips: quote.spread,
+        slDistance: Math.abs(r.entryPrice - r.stopLoss),
+      },
+      components: { ...base.components, priceAction: { ...base.components.priceAction, pattern: config.strategy, direction: dir, description: r.reason } },
+    };
   }
 
   private async previousDayRange(pair: string): Promise<{ high: number; low: number } | undefined> {
@@ -377,7 +429,8 @@ export class TradingBot {
     if (!config.aiReviewEnabled) return 'approved';
 
     const prompt = [
-      `Instrument: ${signal.pair} (gold, 1 pip = 0.1)`,
+      `Instrument: ${signal.pair} (gold, 1 pip = 0.1), ${config.entryTimeframe} candles`,
+      `Strategy: ${config.strategy} — ${signal.reasoning}`,
       `Proposed side: ${signal.signal}`,
       `Entry: ${signal.entryPrice}`,
       `Stop loss: ${signal.stopLoss}`,
@@ -390,7 +443,7 @@ export class TradingBot {
       `Nearest support: ${signal.components.supportResistance.support?.level ?? 'none'}`,
       `Nearest resistance: ${signal.components.supportResistance.resistance?.level ?? 'none'}`,
       `Fixed risk: $${config.riskPerTrade} per trade (${config.riskPercent}% of $${config.accountBalance}). ` +
-        'Reject setups that contradict the breakout or sit directly into a nearby level.',
+        'Reject setups that contradict the strategy logic or run straight into a nearby level.',
     ].join('\n');
 
     try {
