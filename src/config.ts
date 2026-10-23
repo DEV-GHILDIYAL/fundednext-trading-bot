@@ -30,6 +30,7 @@ const STRATEGIES = [
   'raynerEma',
   'ictSilverBullet',
   'casperSmc',
+  'supertrend',
 ] as const;
 export type StrategyKey = (typeof STRATEGIES)[number];
 

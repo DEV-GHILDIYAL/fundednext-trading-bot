@@ -16,7 +16,7 @@ import { config, EntryTimeframe, TIMEFRAME_MINUTES } from '../src/config';
 import { createMarketDataSource, CandleData, MarketDataSource } from '../src/api/market';
 import { defaultStrategyParams, rangeBarsFor } from '../src/strategies/entrySignalGenerator';
 import { computeIndicators, Indicators, INDICATOR_WARMUP } from '../src/strategies/indicators';
-import { evaluateStrategy, isSignal, StrategyName, STRATEGY_NAMES } from '../src/strategies/library';
+import { evaluateStrategy, isSignal, StrategyName, STRATEGY_NAMES, SUPERTREND_EA } from '../src/strategies/library';
 import { getPairSpec, PAIR_LIST } from '../src/constants/pairs';
 import { isWithinTradingSession, getZonedTime, formatMinutes } from '../src/utils/time';
 
@@ -37,6 +37,10 @@ interface BtTrade {
   entry: number;
   sl: number;
   tp: number;
+  /** fixed SL/TP, or Supertrend trailing exit */
+  exit: 'fixed' | 'supertrend';
+  /** initial risk in price units (1R) */
+  risk: number;
 }
 
 interface Dataset {
@@ -71,14 +75,33 @@ const GRID: Record<StrategyName, { tfs: EntryTimeframe[]; sessions: Session[]; r
   raynerEma: { tfs: ['H1', 'H4'], sessions: [SESSIONS.Any, SESSIONS.LonNY], rr: [2, 3] },
   ictSilverBullet: { tfs: ['M15'], sessions: [SESSIONS.Any], rr: [2, 3] },
   casperSmc: { tfs: ['M15'], sessions: [SESSIONS.Any], rr: [3, 4] },
+  // rr 0 = no fixed target (trailing exit)
+  supertrend: { tfs: ['M15', 'M30', 'H1'], sessions: [SESSIONS.Any], rr: [0] },
 };
+
+/** Higher timeframe used for the Supertrend agreement filter */
+const HTF_OF: Partial<Record<EntryTimeframe, EntryTimeframe>> = { M15: 'H1', M30: 'H1', H1: 'H4' };
+
+/** Higher-timeframe Supertrend direction known at each entry candle's close */
+function mapHtfDir(ds: Dataset, tf: EntryTimeframe, htf: Dataset, htfTf: EntryTimeframe): number[] {
+  const out = new Array<number>(ds.candles.length).fill(0);
+  const tfMs = TIMEFRAME_MINUTES[tf] * 60000;
+  const htfMs = TIMEFRAME_MINUTES[htfTf] * 60000;
+  let j = -1;
+  for (let i = 0; i < ds.candles.length; i++) {
+    const closeAt = ds.candles[i].timestamp.getTime() + tfMs;
+    while (j + 1 < htf.candles.length && htf.candles[j + 1].timestamp.getTime() + htfMs <= closeAt) j++;
+    out[i] = j >= 0 ? htf.ind.stDir[j] : 0;
+  }
+  return out;
+}
 
 function arg(name: string, fallback: string): string {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : fallback;
 }
 
-function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number): BtTrade[] {
+function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number, htfDir?: number[]): BtTrade[] {
   const pair = PAIR_LIST[0];
   const spec = getPairSpec(pair);
   const tfMin = TIMEFRAME_MINUTES[v.timeframe];
@@ -94,6 +117,28 @@ function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number):
 
   for (let i = INDICATOR_WARMUP; i < c.length - 1; i++) {
     const bar = c[i];
+    if (open && open.exit === 'supertrend') {
+      // EA exit rules, evaluated like the EA: hard SL intrabar, then on the candle close
+      const buy = open.side === 'BUY';
+      const hitSl = buy ? bar.low <= open.sl : bar.high + spread >= open.sl;
+      const closeAtServer = new Date(bar.timestamp.getTime() + tfMin * 60000);
+      const fridayClose = closeAtServer.getUTCDay() === 5 && closeAtServer.getUTCHours() >= SUPERTREND_EA.fridayCloseHour;
+      let exitPrice: number | null = null;
+      if (hitSl) exitPrice = open.sl;
+      else if (ds.ind.stDir[i] !== (buy ? 1 : -1) || fridayClose) exitPrice = buy ? c[i + 1].open : c[i + 1].open + spread;
+      else {
+        const trail = buy ? ds.ind.stLine[i] - SUPERTREND_EA.slBuffer : ds.ind.stLine[i] + SUPERTREND_EA.slBuffer;
+        if (buy ? trail > open.sl : trail < open.sl) open.sl = trail; // only tighter
+      }
+      if (exitPrice !== null) {
+        const pnl = buy ? exitPrice - open.entry : open.entry - exitPrice;
+        open.r = parseFloat((pnl / open.risk).toFixed(3));
+        open.result = open.r > 0 ? 'WIN' : 'LOSS';
+        perDay.get(open.day)!.r += open.r;
+        open = null;
+        if (hitSl) continue; // stopped mid-candle: new signals are taken from the next close
+      } else continue;
+    }
     if (open) {
       const hitSl = open.side === 'BUY' ? bar.low <= open.sl : bar.high + spread >= open.sl;
       const hitTp = open.side === 'BUY' ? bar.high >= open.tp : bar.low + spread <= open.tp;
@@ -129,10 +174,23 @@ function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number):
       maxSpreadPips: config.maxSpreadPips,
       breakout: breakoutParams,
       toUtc,
+      htfDir: htfDir ? htfDir[i] : undefined,
     });
     if (!isSignal(result)) continue;
 
-    open = { openedAt: closeAt, index: i, result: 'OPEN', r: 0, day, side: result.side, entry: result.entryPrice, sl: result.stopLoss, tp: result.takeProfit };
+    open = {
+      openedAt: closeAt,
+      index: i,
+      result: 'OPEN',
+      r: 0,
+      day,
+      side: result.side,
+      entry: result.entryPrice,
+      sl: result.stopLoss,
+      tp: result.takeProfit,
+      exit: result.exit ?? 'fixed',
+      risk: Math.abs(result.entryPrice - result.stopLoss),
+    };
     trades.push(open);
     today.n++;
     perDay.set(day, today);
@@ -140,11 +198,12 @@ function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number):
   return trades;
 }
 
-function summarize(trades: BtTrade[], ds: Dataset, rr: number) {
+function summarize(trades: BtTrade[], ds: Dataset) {
   const done = trades.filter((t) => t.result !== 'OPEN');
   const split = Math.floor(ds.candles.length * 0.7);
-  const wins = done.filter((t) => t.result === 'WIN').length;
-  const losses = done.length - wins;
+  const wins = done.filter((t) => t.r > 0).length;
+  const grossWin = done.filter((t) => t.r > 0).reduce((s, t) => s + t.r, 0);
+  const grossLoss = -done.filter((t) => t.r < 0).reduce((s, t) => s + t.r, 0);
   const netR = done.reduce((s, t) => s + t.r, 0);
   const isR = done.filter((t) => t.index < split).reduce((s, t) => s + t.r, 0);
   const oosR = done.filter((t) => t.index >= split).reduce((s, t) => s + t.r, 0);
@@ -153,7 +212,7 @@ function summarize(trades: BtTrade[], ds: Dataset, rr: number) {
     eq += t.r;
     peak = Math.max(peak, eq);
     maxDd = Math.max(maxDd, peak - eq);
-    run = t.result === 'LOSS' ? run + 1 : 0;
+    run = t.r < 0 ? run + 1 : 0;
     maxRun = Math.max(maxRun, run);
   }
   const perWeekR = ds.weeks > 0 ? netR / ds.weeks : 0;
@@ -165,7 +224,7 @@ function summarize(trades: BtTrade[], ds: Dataset, rr: number) {
     netR,
     isR,
     oosR,
-    pf: losses ? (wins * rr) / losses : Infinity,
+    pf: grossLoss > 0 ? grossWin / grossLoss : Infinity,
     maxDd,
     maxRun,
     weeksP1: perWeekR > 0 ? (config.accountBalance * 0.08) / riskR / perWeekR : Infinity,
@@ -204,6 +263,11 @@ async function main(): Promise<void> {
   const timeframes: EntryTimeframe[] = matrix
     ? Array.from(new Set(names.flatMap((n) => GRID[n].tfs)))
     : [config.entryTimeframe];
+  // higher timeframes needed by the Supertrend filter
+  if ((matrix && names.includes('supertrend')) || (!matrix && config.strategy === 'supertrend')) {
+    const extra = (matrix ? GRID.supertrend.tfs : [config.entryTimeframe]).map((tf) => HTF_OF[tf]).filter((x): x is EntryTimeframe => !!x);
+    for (const tf of extra) if (!timeframes.includes(tf)) timeframes.push(tf);
+  }
   const datasets = new Map<EntryTimeframe, Dataset>();
   for (const tf of timeframes) {
     datasets.set(tf, await loadDataset(market, tf, tf === 'H1' ? bars : 10000));
@@ -229,8 +293,10 @@ async function main(): Promise<void> {
 
   const rows = variants.map((v) => {
     const ds = datasets.get(v.timeframe)!;
-    const trades = runBacktest(ds, v, spread, offsetMs);
-    return { v, ds, trades, s: summarize(trades, ds, v.rewardRatio) };
+    const htfTf = v.strategy === 'supertrend' ? HTF_OF[v.timeframe] : undefined;
+    const htfDir = htfTf && datasets.has(htfTf) ? mapHtfDir(ds, v.timeframe, datasets.get(htfTf)!, htfTf) : undefined;
+    const trades = runBacktest(ds, v, spread, offsetMs, htfDir);
+    return { v, ds, trades, s: summarize(trades, ds) };
   });
 
   const header =
@@ -238,7 +304,7 @@ async function main(): Promise<void> {
     '/wk'.padStart(5) + 'Win%'.padStart(6) + 'NetR'.padStart(7) + 'IS R'.padStart(7) + 'OOS R'.padStart(7) + 'PF'.padStart(6) +
     'DD R'.padStart(6) + 'LRun'.padStart(5) + 'P1 wk'.padStart(7) + 'P2 wk'.padStart(7);
   const line = (r: (typeof rows)[number]) =>
-    r.v.strategy.padEnd(16) + r.v.timeframe.padEnd(5) + r.v.session.name.padEnd(8) + f(r.v.rewardRatio).padStart(4) +
+    r.v.strategy.padEnd(16) + r.v.timeframe.padEnd(5) + r.v.session.name.padEnd(8) + (r.v.rewardRatio === 0 ? 'trl' : f(r.v.rewardRatio)).padStart(4) +
     f(r.ds.weeks, 0).padStart(5) + String(r.s.trades).padStart(5) + f(r.s.perWeek).padStart(5) + f(r.s.winRate, 0).padStart(6) +
     f(r.s.netR).padStart(7) + f(r.s.isR).padStart(7) + f(r.s.oosR).padStart(7) + f(r.s.pf, 2).padStart(6) + f(r.s.maxDd).padStart(6) +
     String(r.s.maxRun).padStart(5) + f(r.s.weeksP1, 0).padStart(7) + f(r.s.weeksP2, 0).padStart(7);
@@ -262,7 +328,7 @@ async function main(): Promise<void> {
     console.log(header);
     console.log(line(rows[0]));
     for (const t of rows[0].trades.filter((x) => x.result !== 'OPEN').slice(-10)) {
-      console.log(`  ${t.openedAt.toISOString().slice(0, 16)} ${t.side} ${t.entry} SL ${t.sl} TP ${t.tp} → ${t.result}`);
+      console.log(`  ${t.openedAt.toISOString().slice(0, 16)} ${t.side} ${t.entry} SL ${t.sl.toFixed(2)} ${t.exit === "supertrend" ? "trail" : `TP ${t.tp}`} → ${t.result} (${t.r.toFixed(2)}R)`);
     }
   }
 

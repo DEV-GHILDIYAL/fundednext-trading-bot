@@ -324,8 +324,8 @@ describe('Strategy library: educator strategies', () => {
       return { timestamp: new Date(start + k * 3600e3), open: base, high: base + 4, low: base - 4, close: base + 1, closed: true };
     });
 
-  it('exposes all 13 strategies', () => {
-    expect(STRATEGY_NAMES).toHaveLength(13);
+  it('exposes all 14 strategies', () => {
+    expect(STRATEGY_NAMES).toHaveLength(14);
   });
 
   it('turtle20 buys the first close above the 20-bar high with a 2×ATR stop', () => {
@@ -367,4 +367,25 @@ describe('Strategy library: educator strategies', () => {
   function serverDayOf(x: CandleData): string {
     return x.timestamp.toISOString().slice(0, 10);
   }
+});
+
+describe('Supertrend EA', () => {
+  const { supertrend, adx } = jest.requireActual('../../src/strategies/indicators');
+  const mk = (closes: number[]): CandleData[] =>
+    closes.map((c, k) => ({ timestamp: new Date(Date.UTC(2026, 0, 5, 10) + k * 900e3), open: c - 0.5, high: c + 1, low: c - 1, close: c, closed: true }));
+
+  it('Supertrend is up in a rising market and flips down after a crash', () => {
+    const up = Array.from({ length: 60 }, (_, k) => 4000 + k * 2);
+    const st = supertrend(mk(up), 10, 3);
+    expect(st.dir[59]).toBe(1);
+    expect(st.line[59]).toBeLessThan(up[59]);
+    const crash = [...up, ...Array.from({ length: 10 }, (_, k) => up[59] - 20 - k * 5)];
+    expect(supertrend(mk(crash), 10, 3).dir[69]).toBe(-1);
+  });
+
+  it('ADX is high and +DI leads in a steady uptrend', () => {
+    const a = adx(mk(Array.from({ length: 80 }, (_, k) => 4000 + k * 2)), 14);
+    expect(a.adx[79]).toBeGreaterThan(22);
+    expect(a.pdi[79]).toBeGreaterThan(a.mdi[79]);
+  });
 });

@@ -16,6 +16,8 @@
  *   raynerEma      Rayner Teo: EMA20>EMA50 trend, pullback into the 20/50 zone that has held twice
  *   ictSilverBullet ICT Silver Bullet: NY 03–04/10–11/14–15, sweep → FVG → retest, stop beyond the sweep
  *   casperSmc      Casper SMC continuation: NY 07:30–10:30, liquidity taken → pullback → displacement (ChoCH)
+ *   supertrend     SupertrendGold Prop EA: ST(10,3) direction + ADX≥22 + ≤2 flips/30 bars + higher-TF ST agrees;
+ *                  SL = ST line ± $3.5, NO fixed TP — exit when a candle closes beyond the line (trailing)
  *
  * Every strategy: stop distance clamped to [slMinAtr, slMaxAtr] × ATR, TP = rewardRatio × stop.
  */
@@ -39,6 +41,7 @@ export const STRATEGY_NAMES = [
   'raynerEma',
   'ictSilverBullet',
   'casperSmc',
+  'supertrend',
 ] as const;
 export type StrategyName = (typeof STRATEGY_NAMES)[number];
 
@@ -65,15 +68,33 @@ export interface LibContext {
   breakout: StrategyParams;
   /** Bar timestamps → real UTC (MT5 bars carry broker server time) */
   toUtc: (d: Date) => Date;
+  /** Supertrend direction on the higher timeframe at this bar (supertrend strategy) */
+  htfDir?: number;
 }
 
 export interface LibSignal {
   side: 'BUY' | 'SELL';
   entryPrice: number;
   stopLoss: number;
+  /** 0 when the strategy has no fixed target (trailing exit) */
   takeProfit: number;
   reason: string;
+  /** fixed = SL/TP only; supertrend = trail SL to the ST line and exit on a close beyond it */
+  exit?: 'fixed' | 'supertrend';
 }
+
+/** SupertrendGold EA settings (defaults of the user's MQL5 EA v1.10) */
+export const SUPERTREND_EA = {
+  slBuffer: 3.5,
+  adxMin: 22,
+  flipLookback: 30,
+  maxFlips: 2,
+  minDistAtr: 0.7,
+  maxDistAtr: 4.5,
+  sessionStartHour: 9, // broker server time
+  sessionEndHour: 22,
+  fridayCloseHour: 21,
+};
 
 export type LibResult = LibSignal | { skip: string };
 
@@ -434,6 +455,49 @@ function casperSmc(ctx: LibContext): LibResult {
   return skip('No liquidity → pullback → ChoCH');
 }
 
+/** SupertrendGold Prop EA entry (all filters on the closed candle; entry at the next open) */
+function supertrendEa(ctx: LibContext): LibResult {
+  const { candles: c, i, ind } = ctx;
+  const E = SUPERTREND_EA;
+  if (i < E.flipLookback + 15) return skip('Not enough candles');
+  const d = ind.stDir[i];
+  if (d === 0 || !Number.isFinite(ind.stLine[i])) return skip('Supertrend warming up');
+
+  // session / Friday cutoff in broker server time (bar times are server time)
+  const entryAt = new Date(c[i].timestamp.getTime() + ctx.tfMinutes * 60000);
+  const h = entryAt.getUTCHours();
+  if (h < E.sessionStartHour || h >= E.sessionEndHour) return skip('Outside EA session (server time)');
+  if (entryAt.getUTCDay() === 5 && h >= E.fridayCloseHour - 1) return skip('Friday cutoff');
+
+  if (!(ind.adx14[i] >= E.adxMin)) return skip(`Sideways: ADX ${ind.adx14[i]?.toFixed(0)} < ${E.adxMin}`);
+  if (d === 1 && !(ind.pdi14[i] > ind.mdi14[i])) return skip('ADX direction disagrees');
+  if (d === -1 && !(ind.mdi14[i] > ind.pdi14[i])) return skip('ADX direction disagrees');
+
+  let flips = 0;
+  for (let j = i - E.flipLookback + 1; j <= i; j++) if (ind.stDir[j] !== ind.stDir[j - 1]) flips++;
+  if (flips > E.maxFlips) return skip(`Sideways: ${flips} flips`);
+  if (ctx.htfDir !== undefined && ctx.htfDir !== d) return skip('HTF Supertrend disagrees');
+
+  const side: 'BUY' | 'SELL' = d === 1 ? 'BUY' : 'SELL';
+  const price = side === 'BUY' ? ctx.quote.ask : ctx.quote.bid;
+  const line = ind.stLine[i];
+  const dist = Math.abs(price - line);
+  const a = ind.stAtr[i];
+  if (dist < E.minDistAtr * a) return skip('Too close to line');
+  if (dist > E.maxDistAtr * a) return skip('Too far from line (late entry)');
+  if ((d === 1 && line >= price) || (d === -1 && line <= price)) return skip('Price on wrong side of line');
+
+  const sl = side === 'BUY' ? line - E.slBuffer : line + E.slBuffer;
+  return {
+    side,
+    entryPrice: round(ctx.pair, price),
+    stopLoss: round(ctx.pair, sl),
+    takeProfit: 0,
+    reason: `Supertrend ${side === 'BUY' ? 'up' : 'down'}, ADX ${ind.adx14[i].toFixed(0)}, ${flips} flips, HTF agrees`,
+    exit: 'supertrend',
+  };
+}
+
 const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   breakout,
   trendPullback,
@@ -448,9 +512,15 @@ const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   raynerEma,
   ictSilverBullet,
   casperSmc,
+  supertrend: supertrendEa,
 };
 
 export function evaluateStrategy(name: StrategyName, ctx: LibContext): LibResult {
+  if (name === 'supertrend') {
+    // EA has its own filters (ADX, flips, distance); only the spread check is shared
+    if (ctx.quote.spread > ctx.maxSpreadPips) return skip(`Spread ${ctx.quote.spread} > max ${ctx.maxSpreadPips} pips`);
+    return IMPL[name](ctx);
+  }
   if (name !== 'breakout') {
     const blocked = commonFilters(ctx);
     if (blocked) return skip(blocked);

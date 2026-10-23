@@ -390,6 +390,10 @@ export class TradingBot {
       toUtc: (d) => new Date(d.getTime() - offset),
     });
     if (!isSignal(r)) return EntrySignalGenerator.skipSignal(pair, r.skip, candleTime);
+    if (r.exit === 'supertrend') {
+      // trailing / flip exits are backtest-only for now — never open a trade without its exit logic
+      return EntrySignalGenerator.skipSignal(pair, 'Supertrend trailing exit not available in the live bot yet (backtest only)', candleTime);
+    }
 
     const base = EntrySignalGenerator.skipSignal(pair, '', candleTime);
     const dir = r.side === 'BUY' ? 'UP' : 'DOWN';
