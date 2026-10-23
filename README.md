@@ -28,7 +28,9 @@ Live orders on simulated prices are refused.
 ## Strategies
 
 `STRATEGY=` picks one from `src/strategies/library.ts` — the backtest and the live bot run the same code:
-`breakout` (default) · `trendPullback` · `asianBreakout` · `meanReversion` · `emaCross` · `donchian`.
+`breakout` (default) · `trendPullback` · `asianBreakout` · `meanReversion` · `emaCross` · `donchian`,
+plus objective versions of educators' setups: `turtle20`/`turtle55` (Turtle, AlgoWorld), `volBreakout` (Larry Williams),
+`pinBar` (Nial Fuller), `raynerEma` (Rayner Teo), `ictSilverBullet` (ICT), `casperSmc` (Casper SMC).
 Compare them on real MT5 history: `npm run backtest -- --strategies` (ranked, with in-sample / out-of-sample split).
 
 ### Breakout rules (summary — full rules in the project's `STRATEGY.md`)

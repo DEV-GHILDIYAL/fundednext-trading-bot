@@ -3,6 +3,7 @@
  *
  *   npm run backtest                      # strategy/settings from .env
  *   npm run backtest -- --strategies      # every strategy × timeframe × session × R:R, ranked
+ *   npm run backtest -- --strategies --only asianBreakout,turtle20   # just some strategies
  *   npm run backtest -- --bars 5000       # H1 history length (M30/M15 always use 10000 bars)
  *   npm run backtest -- --source sim      # offline smoke test (random-walk feed)
  *
@@ -48,6 +49,28 @@ const SESSIONS = {
   London: { name: 'London', start: 8 * 60, end: 11 * 60 + 30 },
   LonNY: { name: 'Lon+NY', start: 8 * 60, end: 16 * 60 + 30 },
   AllDay: { name: 'AllDay', start: 1 * 60, end: 21 * 60 },
+  Any: { name: 'Any', start: 0, end: 24 * 60 },
+};
+
+type Session = (typeof SESSIONS)[keyof typeof SESSIONS];
+const INTRADAY: EntryTimeframe[] = ['H1', 'M30', 'M15'];
+const INTRADAY_SESSIONS: Session[] = [SESSIONS.London, SESSIONS.LonNY, SESSIONS.AllDay];
+
+/** Which timeframes / sessions / R:R each strategy is tested on */
+const GRID: Record<StrategyName, { tfs: EntryTimeframe[]; sessions: Session[]; rr: number[] }> = {
+  breakout: { tfs: INTRADAY, sessions: INTRADAY_SESSIONS, rr: [1.5, 2] },
+  trendPullback: { tfs: INTRADAY, sessions: INTRADAY_SESSIONS, rr: [1.5, 2] },
+  asianBreakout: { tfs: INTRADAY, sessions: INTRADAY_SESSIONS, rr: [1.5, 2] },
+  meanReversion: { tfs: INTRADAY, sessions: INTRADAY_SESSIONS, rr: [1.5, 2] },
+  emaCross: { tfs: INTRADAY, sessions: INTRADAY_SESSIONS, rr: [1.5, 2] },
+  donchian: { tfs: INTRADAY, sessions: INTRADAY_SESSIONS, rr: [1.5, 2] },
+  turtle20: { tfs: ['H1', 'H4', 'D1'], sessions: [SESSIONS.Any], rr: [2, 3] },
+  turtle55: { tfs: ['H1', 'H4', 'D1'], sessions: [SESSIONS.Any], rr: [2, 3] },
+  volBreakout: { tfs: INTRADAY, sessions: INTRADAY_SESSIONS, rr: [1.5, 2] },
+  pinBar: { tfs: ['H1', 'H4', 'D1'], sessions: [SESSIONS.Any], rr: [2, 3] },
+  raynerEma: { tfs: ['H1', 'H4'], sessions: [SESSIONS.Any, SESSIONS.LonNY], rr: [2, 3] },
+  ictSilverBullet: { tfs: ['M15'], sessions: [SESSIONS.Any], rr: [2, 3] },
+  casperSmc: { tfs: ['M15'], sessions: [SESSIONS.Any], rr: [3, 4] },
 };
 
 function arg(name: string, fallback: string): string {
@@ -173,7 +196,14 @@ async function main(): Promise<void> {
   const offsetMs = source === 'mt5' ? Math.round((quote.timestamp.getTime() - Date.now()) / 1800000) * 1800000 : 0;
   console.log(`Backtest ${pair} on ${source.toUpperCase()} | spread ${spread.toFixed(2)} | server offset ${(offsetMs / 3600000).toFixed(1)}h | risk $${config.riskPerTrade}/trade`);
 
-  const timeframes: EntryTimeframe[] = matrix ? ['H1', 'M30', 'M15'] : [config.entryTimeframe];
+  const only = arg('only', '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const names = STRATEGY_NAMES.filter((n) => only.length === 0 || only.includes(n));
+  const timeframes: EntryTimeframe[] = matrix
+    ? Array.from(new Set(names.flatMap((n) => GRID[n].tfs)))
+    : [config.entryTimeframe];
   const datasets = new Map<EntryTimeframe, Dataset>();
   for (const tf of timeframes) {
     datasets.set(tf, await loadDataset(market, tf, tf === 'H1' ? bars : 10000));
@@ -183,10 +213,11 @@ async function main(): Promise<void> {
 
   const variants: Variant[] = [];
   if (matrix) {
-    for (const strategy of STRATEGY_NAMES)
-      for (const timeframe of timeframes)
-        for (const session of Object.values(SESSIONS))
-          for (const rewardRatio of [1.5, 2]) variants.push({ strategy, timeframe, session, rewardRatio });
+    for (const strategy of names)
+      for (const timeframe of GRID[strategy].tfs)
+        for (const session of GRID[strategy].sessions)
+          for (const rewardRatio of GRID[strategy].rr) variants.push({ strategy, timeframe, session, rewardRatio });
+    console.log(`  ${variants.length} combinations to test...`);
   } else {
     variants.push({
       strategy: config.strategy,
@@ -203,11 +234,11 @@ async function main(): Promise<void> {
   });
 
   const header =
-    'Strategy'.padEnd(15) + 'TF'.padEnd(5) + 'Session'.padEnd(8) + 'RR'.padStart(4) + 'Wks'.padStart(5) + 'Trd'.padStart(5) +
+    'Strategy'.padEnd(16) + 'TF'.padEnd(5) + 'Session'.padEnd(8) + 'RR'.padStart(4) + 'Wks'.padStart(5) + 'Trd'.padStart(5) +
     '/wk'.padStart(5) + 'Win%'.padStart(6) + 'NetR'.padStart(7) + 'IS R'.padStart(7) + 'OOS R'.padStart(7) + 'PF'.padStart(6) +
     'DD R'.padStart(6) + 'LRun'.padStart(5) + 'P1 wk'.padStart(7) + 'P2 wk'.padStart(7);
   const line = (r: (typeof rows)[number]) =>
-    r.v.strategy.padEnd(15) + r.v.timeframe.padEnd(5) + r.v.session.name.padEnd(8) + f(r.v.rewardRatio).padStart(4) +
+    r.v.strategy.padEnd(16) + r.v.timeframe.padEnd(5) + r.v.session.name.padEnd(8) + f(r.v.rewardRatio).padStart(4) +
     f(r.ds.weeks, 0).padStart(5) + String(r.s.trades).padStart(5) + f(r.s.perWeek).padStart(5) + f(r.s.winRate, 0).padStart(6) +
     f(r.s.netR).padStart(7) + f(r.s.isR).padStart(7) + f(r.s.oosR).padStart(7) + f(r.s.pf, 2).padStart(6) + f(r.s.maxDd).padStart(6) +
     String(r.s.maxRun).padStart(5) + f(r.s.weeksP1, 0).padStart(7) + f(r.s.weeksP2, 0).padStart(7);
@@ -222,7 +253,7 @@ async function main(): Promise<void> {
 
     console.log('\n=== BEST ROW PER STRATEGY (by Net R) ===');
     console.log(header);
-    for (const name of STRATEGY_NAMES) {
+    for (const name of names) {
       const best = rows.filter((r) => r.v.strategy === name).sort((a, b) => b.s.netR - a.s.netR)[0];
       if (best) console.log(line(best));
     }

@@ -9,6 +9,14 @@
  *   emaCross       EMA9 crosses EMA21 in the EMA200 trend direction
  *   donchian       close beyond the 20-candle high/low in the EMA200 trend direction
  *
+ * Objective versions of well-known educators' strategies (interpretations, not their exact method):
+ *   turtle20/55    Turtle channel breakout (Kivanc Ozbilgic's AlgoWorld implementation): 20/55-bar break, 2×ATR stop
+ *   volBreakout    Larry Williams volatility breakout: today's open ± 0.5 × yesterday's range, one per day
+ *   pinBar         Nial Fuller price action: pin bar at a swing level or inside-bar breakout, with the trend
+ *   raynerEma      Rayner Teo: EMA20>EMA50 trend, pullback into the 20/50 zone that has held twice
+ *   ictSilverBullet ICT Silver Bullet: NY 03–04/10–11/14–15, sweep → FVG → retest, stop beyond the sweep
+ *   casperSmc      Casper SMC continuation: NY 07:30–10:30, liquidity taken → pullback → displacement (ChoCH)
+ *
  * Every strategy: stop distance clamped to [slMinAtr, slMaxAtr] × ATR, TP = rewardRatio × stop.
  */
 import { CandleData, PriceData, computeAtrPips } from '../api/market';
@@ -17,7 +25,21 @@ import { getZonedTime } from '../utils/time';
 import { Indicators } from './indicators';
 import { EntrySignalGenerator, StrategyParams, minClosedCandles } from './entrySignalGenerator';
 
-export const STRATEGY_NAMES = ['breakout', 'trendPullback', 'asianBreakout', 'meanReversion', 'emaCross', 'donchian'] as const;
+export const STRATEGY_NAMES = [
+  'breakout',
+  'trendPullback',
+  'asianBreakout',
+  'meanReversion',
+  'emaCross',
+  'donchian',
+  'turtle20',
+  'turtle55',
+  'volBreakout',
+  'pinBar',
+  'raynerEma',
+  'ictSilverBullet',
+  'casperSmc',
+] as const;
 export type StrategyName = (typeof STRATEGY_NAMES)[number];
 
 export function isStrategyName(value: string): value is StrategyName {
@@ -198,6 +220,220 @@ function donchian(ctx: LibContext): LibResult {
   return skip('No 20-bar breakout');
 }
 
+// ─────────────────────────────── named educators' strategies ───────────────────────────────
+
+/** Turtle channel breakout (no trend filter), initial stop 2 × ATR */
+function turtle(n: number) {
+  return (ctx: LibContext): LibResult => {
+    const { candles: c, i, ind } = ctx;
+    if (i < n + 1) return skip('Not enough candles');
+    let hi = -Infinity;
+    let lo = Infinity;
+    for (let j = i - n; j < i; j++) {
+      hi = Math.max(hi, c[j].high);
+      lo = Math.min(lo, c[j].low);
+    }
+    const a = ind.atr14[i];
+    if (c[i].close > hi && c[i - 1].close <= hi) return build(ctx, 'BUY', c[i].close - 2 * a, `Turtle: close above ${n}-bar high ${hi}`);
+    if (c[i].close < lo && c[i - 1].close >= lo) return build(ctx, 'SELL', c[i].close + 2 * a, `Turtle: close below ${n}-bar low ${lo}`);
+    return skip(`No ${n}-bar breakout`);
+  };
+}
+
+const serverDay = (d: Date) => d.toISOString().slice(0, 10);
+
+/** Larry Williams volatility breakout from today's open by k × yesterday's range (broker day) */
+function volBreakout(ctx: LibContext, k: number = 0.5): LibResult {
+  const { candles: c, i } = ctx;
+  const today = serverDay(c[i].timestamp);
+  let first = i;
+  while (first > 0 && serverDay(c[first - 1].timestamp) === today) first--;
+  if (first === 0) return skip('No previous day in data');
+  const yesterday = serverDay(c[first - 1].timestamp);
+  let hi = -Infinity;
+  let lo = Infinity;
+  let bars = 0;
+  for (let j = first - 1; j >= 0 && serverDay(c[j].timestamp) === yesterday; j--) {
+    hi = Math.max(hi, c[j].high);
+    lo = Math.min(lo, c[j].low);
+    bars++;
+  }
+  if (bars < Math.floor((12 * 60) / ctx.tfMinutes)) return skip('Previous day incomplete');
+  const range = hi - lo;
+  const open = c[first].open;
+  const up = open + k * range;
+  const down = open - k * range;
+  // only the first close beyond the level today
+  for (let j = first; j < i; j++) {
+    if (c[j].close > up || c[j].close < down) return skip('Already triggered today');
+  }
+  if (c[i].close > up) return build(ctx, 'BUY', c[i].close - 0.5 * range, `Open ${open} + ${k}×range ${range.toFixed(2)} broken`);
+  if (c[i].close < down) return build(ctx, 'SELL', c[i].close + 0.5 * range, `Open ${open} − ${k}×range ${range.toFixed(2)} broken`);
+  return skip('No volatility breakout');
+}
+
+/** Swing (fractal) lows/highs with `w` bars on each side, between indices [from, to] */
+function swings(c: CandleData[], from: number, to: number, w: number = 2): { lows: number[]; highs: number[] } {
+  const lows: number[] = [];
+  const highs: number[] = [];
+  for (let j = Math.max(from, w); j <= to - w; j++) {
+    let isLow = true;
+    let isHigh = true;
+    for (let k = j - w; k <= j + w; k++) {
+      if (k === j) continue;
+      if (c[k].low <= c[j].low) isLow = false;
+      if (c[k].high >= c[j].high) isHigh = false;
+    }
+    if (isLow) lows.push(c[j].low);
+    if (isHigh) highs.push(c[j].high);
+  }
+  return { lows, highs };
+}
+
+/** Nial Fuller price action: pin bar rejecting a swing level, or inside-bar breakout — with the trend */
+function pinBar(ctx: LibContext): LibResult {
+  const { candles: c, i, ind } = ctx;
+  if (i < 65) return skip('Not enough candles');
+  const a = ind.atr14[i];
+  const bar = c[i];
+  const range = bar.high - bar.low;
+  if (range <= 0) return skip('Zero range');
+  const body = Math.abs(bar.close - bar.open);
+  const lowerWick = Math.min(bar.open, bar.close) - bar.low;
+  const upperWick = bar.high - Math.max(bar.open, bar.close);
+  const up = bar.close > ind.ema50[i] && ind.ema50[i] > ind.ema50[i - 5];
+  const down = bar.close < ind.ema50[i] && ind.ema50[i] < ind.ema50[i - 5];
+  const { lows, highs } = swings(c, i - 60, i - 3);
+
+  const bullPin = lowerWick >= 2.5 * body && lowerWick >= 0.6 * range && bar.close >= bar.low + 0.6 * range;
+  const bearPin = upperWick >= 2.5 * body && upperWick >= 0.6 * range && bar.close <= bar.high - 0.6 * range;
+  if (up && bullPin && lows.some((l) => Math.abs(bar.low - l) <= 0.5 * a)) {
+    return build(ctx, 'BUY', bar.low - 0.1 * a, 'Bullish pin bar at swing-low level, uptrend');
+  }
+  if (down && bearPin && highs.some((h) => Math.abs(bar.high - h) <= 0.5 * a)) {
+    return build(ctx, 'SELL', bar.high + 0.1 * a, 'Bearish pin bar at swing-high level, downtrend');
+  }
+
+  // Inside bar (c[i-1] inside mother c[i-2]) broken in the trend direction by c[i]
+  const mother = c[i - 2];
+  const inside = c[i - 1].high < mother.high && c[i - 1].low > mother.low;
+  if (inside && up && bar.close > mother.high) return build(ctx, 'BUY', mother.low - 0.1 * a, 'Inside-bar breakout up, uptrend');
+  if (inside && down && bar.close < mother.low) return build(ctx, 'SELL', mother.high + 0.1 * a, 'Inside-bar breakout down, downtrend');
+  return skip('No pin bar / inside bar setup');
+}
+
+/** Rayner Teo: trend (EMA20>EMA50, both rising), pullback into the 20/50 zone that has held at least twice */
+function raynerEma(ctx: LibContext): LibResult {
+  const { candles: c, i, ind } = ctx;
+  if (i < 40) return skip('Not enough candles');
+  const a = ind.atr14[i];
+  const bar = c[i];
+  const up = ind.ema20[i] > ind.ema50[i] && ind.ema20[i] > ind.ema20[i - 3] && ind.ema50[i] > ind.ema50[i - 3];
+  const down = ind.ema20[i] < ind.ema50[i] && ind.ema20[i] < ind.ema20[i - 3] && ind.ema50[i] < ind.ema50[i - 3];
+  if (!up && !down) return skip('EMAs flat or tangled');
+
+  // count separate earlier touches of the zone that held (closed back on the trend side of EMA50)
+  let touches = 0;
+  let inTouch = false;
+  for (let j = i - 30; j < i; j++) {
+    const touched = up ? c[j].low <= ind.ema20[j] && c[j].close > ind.ema50[j] : c[j].high >= ind.ema20[j] && c[j].close < ind.ema50[j];
+    if (touched && !inTouch) touches++;
+    inTouch = touched;
+  }
+  if (touches < 2) return skip(`Zone respected ${touches}× (<2)`);
+
+  if (up && bar.low <= ind.ema20[i] && bar.low >= ind.ema50[i] - 0.5 * a && bar.close > ind.ema20[i] && bar.close > bar.open) {
+    return build(ctx, 'BUY', Math.min(bar.low, ind.ema50[i]) - 0.3 * a, 'Pullback into EMA20/50 zone, bullish close');
+  }
+  if (down && bar.high >= ind.ema20[i] && bar.high <= ind.ema50[i] + 0.5 * a && bar.close < ind.ema20[i] && bar.close < bar.open) {
+    return build(ctx, 'SELL', Math.max(bar.high, ind.ema50[i]) + 0.3 * a, 'Pullback into EMA20/50 zone, bearish close');
+  }
+  return skip('Trend but no zone pullback');
+}
+
+const nyMinutes = (ctx: LibContext, d: Date) => getZonedTime(ctx.toUtc(d), 'America/New_York').minutesOfDay;
+
+/** ICT Silver Bullet: in a NY window, sweep of a 20-bar extreme → FVG → first retest of the FVG */
+function ictSilverBullet(ctx: LibContext): LibResult {
+  const { candles: c, i, ind } = ctx;
+  const windows = [
+    [3 * 60, 4 * 60],
+    [10 * 60, 11 * 60],
+    [14 * 60, 15 * 60],
+  ];
+  const m = nyMinutes(ctx, c[i].timestamp);
+  if (!windows.some(([s, e]) => m >= s && m < e)) return skip('Outside Silver Bullet windows');
+  if (i < 40) return skip('Not enough candles');
+  const a = ind.atr14[i];
+  const lookback = Math.max(4, Math.round(120 / ctx.tfMinutes)); // sweep/FVG within the last ~2h
+
+  for (const bull of [true, false]) {
+    if (bull && !(c[i].close > ind.ema200[i])) continue;
+    if (!bull && !(c[i].close < ind.ema200[i])) continue;
+    for (let k = i - lookback; k <= i - 3; k++) {
+      if (k < 21) continue;
+      let ext = bull ? Infinity : -Infinity;
+      for (let j = k - 20; j < k; j++) ext = bull ? Math.min(ext, c[j].low) : Math.max(ext, c[j].high);
+      const swept = bull ? c[k].low < ext && c[k].close > ext : c[k].high > ext && c[k].close < ext;
+      if (!swept) continue;
+      for (let j = k + 2; j <= i - 1; j++) {
+        const top = bull ? c[j].low : c[j - 2].low; // FVG between c[j-2] and c[j]
+        const bottom = bull ? c[j - 2].high : c[j].high;
+        if (!(top - bottom >= 0.1 * a)) continue;
+        // first return into the gap happens on bar i
+        let touchedBefore = false;
+        for (let t = j + 1; t < i; t++) {
+          if (bull ? c[t].low <= top : c[t].high >= bottom) touchedBefore = true;
+        }
+        if (touchedBefore) continue;
+        const retest = bull ? c[i].low <= top && c[i].close >= bottom : c[i].high >= bottom && c[i].close <= top;
+        if (!retest) continue;
+        return bull
+          ? build(ctx, 'BUY', c[k].low - 0.2 * a, `Sweep of ${ext} → FVG ${bottom}–${top} retest (NY window)`)
+          : build(ctx, 'SELL', c[k].high + 0.2 * a, `Sweep of ${ext} → FVG ${bottom}–${top} retest (NY window)`);
+      }
+    }
+  }
+  return skip('No sweep → FVG → retest');
+}
+
+/** Casper SMC continuation: NY 07:30–10:30, swing high/low taken → pullback → displacement through the pullback's minor swing */
+function casperSmc(ctx: LibContext): LibResult {
+  const { candles: c, i, ind } = ctx;
+  const m = nyMinutes(ctx, c[i].timestamp);
+  if (m < 7 * 60 + 30 || m >= 10 * 60 + 30) return skip('Outside NY 07:30–10:30');
+  if (i < 50) return skip('Not enough candles');
+  const a = ind.atr14[i];
+  const bar = c[i];
+  const body = Math.abs(bar.close - bar.open);
+  if (body < a) return skip('No displacement candle');
+
+  const bull = bar.close > ind.ema200[i] && bar.close > bar.open;
+  const bear = bar.close < ind.ema200[i] && bar.close < bar.open;
+  if (!bull && !bear) return skip('Displacement against the bias');
+
+  // liquidity taken: a bar in the last 20 broke the 20-bar extreme before it
+  for (let h = i - 20; h <= i - 3; h++) {
+    let ext = bull ? -Infinity : Infinity;
+    for (let j = h - 20; j < h; j++) ext = bull ? Math.max(ext, c[j].high) : Math.min(ext, c[j].low);
+    if (bull ? c[h].high <= ext : c[h].low >= ext) continue;
+    // pullback after h
+    let pIdx = h + 1;
+    for (let j = h + 1; j < i; j++) if (bull ? c[j].low < c[pIdx].low : c[j].high > c[pIdx].high) pIdx = j;
+    const depth = bull ? c[h].high - c[pIdx].low : c[pIdx].high - c[h].low;
+    if (pIdx >= i || depth < 0.5 * a) continue;
+    // minor swing of the pullback (last 3 bars into the pullback extreme)
+    let minor = bull ? -Infinity : Infinity;
+    for (let j = Math.max(h + 1, pIdx - 3); j <= pIdx; j++) minor = bull ? Math.max(minor, c[j].high) : Math.min(minor, c[j].low);
+    const choch = bull ? bar.close > minor && c[i - 1].close <= minor : bar.close < minor && c[i - 1].close >= minor;
+    if (!choch) continue;
+    return bull
+      ? build(ctx, 'BUY', c[pIdx].low - 0.2 * a, `Liquidity taken, pullback, displacement through ${minor}`)
+      : build(ctx, 'SELL', c[pIdx].high + 0.2 * a, `Liquidity taken, pullback, displacement through ${minor}`);
+  }
+  return skip('No liquidity → pullback → ChoCH');
+}
+
 const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   breakout,
   trendPullback,
@@ -205,6 +441,13 @@ const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   meanReversion,
   emaCross,
   donchian,
+  turtle20: turtle(20),
+  turtle55: turtle(55),
+  volBreakout: (ctx) => volBreakout(ctx, 0.5),
+  pinBar,
+  raynerEma,
+  ictSilverBullet,
+  casperSmc,
 };
 
 export function evaluateStrategy(name: StrategyName, ctx: LibContext): LibResult {

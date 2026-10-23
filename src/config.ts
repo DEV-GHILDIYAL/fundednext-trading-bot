@@ -10,13 +10,27 @@ const num = (value: string | undefined, fallback: number): number => {
 /** "HH:MM" → minutes since midnight */
 function parseClock(value: string | undefined, fallback: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec((value || fallback).trim()) ?? /^(\d{1,2}):(\d{2})$/.exec(fallback)!;
-  return Math.min(23, parseInt(m[1], 10)) * 60 + Math.min(59, parseInt(m[2], 10));
+  return Math.min(24 * 60, Math.min(24, parseInt(m[1], 10)) * 60 + Math.min(59, parseInt(m[2], 10)));
 }
 
-export type EntryTimeframe = 'M15' | 'M30' | 'H1';
-export const TIMEFRAME_MINUTES: Record<EntryTimeframe, number> = { M15: 15, M30: 30, H1: 60 };
+export type EntryTimeframe = 'M15' | 'M30' | 'H1' | 'H4' | 'D1';
+export const TIMEFRAME_MINUTES: Record<EntryTimeframe, number> = { M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 };
 
-const STRATEGIES = ['breakout', 'trendPullback', 'asianBreakout', 'meanReversion', 'emaCross', 'donchian'] as const;
+const STRATEGIES = [
+  'breakout',
+  'trendPullback',
+  'asianBreakout',
+  'meanReversion',
+  'emaCross',
+  'donchian',
+  'turtle20',
+  'turtle55',
+  'volBreakout',
+  'pinBar',
+  'raynerEma',
+  'ictSilverBullet',
+  'casperSmc',
+] as const;
 export type StrategyKey = (typeof STRATEGIES)[number];
 
 function parseStrategy(value: string | undefined): StrategyKey {
@@ -26,7 +40,7 @@ function parseStrategy(value: string | undefined): StrategyKey {
 
 function parseTimeframe(value: string | undefined): EntryTimeframe {
   const tf = (value || 'H1').toUpperCase();
-  return tf === 'M15' || tf === 'M30' ? tf : 'H1';
+  return tf === 'M15' || tf === 'M30' || tf === 'H4' || tf === 'D1' ? tf : 'H1';
 }
 
 // FundedNext rule set (percentages are of the initial account balance).
@@ -125,7 +139,7 @@ export const config = {
   // Strategy
   // Which strategy from src/strategies/library.ts the bot trades
   strategy: parseStrategy(process.env.STRATEGY),
-  // Candle timeframe for entries: H1 (default), M30 or M15
+  // Candle timeframe for entries: M15 | M30 | H1 (default) | H4 | D1
   entryTimeframe: parseTimeframe(process.env.ENTRY_TIMEFRAME),
   // Breakout range length in hours (rolling mode)
   rangeHours: Math.max(1, num(process.env.RANGE_HOURS, 24)),

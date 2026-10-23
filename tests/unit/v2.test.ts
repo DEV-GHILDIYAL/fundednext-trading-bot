@@ -306,3 +306,65 @@ describe('Strategy library: trendPullback', () => {
     }
   });
 });
+
+describe('Strategy library: educator strategies', () => {
+  const { computeIndicators } = jest.requireActual('../../src/strategies/indicators');
+  const { evaluateStrategy, isSignal, STRATEGY_NAMES } = jest.requireActual('../../src/strategies/library');
+  const ctxFor = (candles: CandleData[], extra: Record<string, unknown> = {}) => {
+    const i = candles.length - 1;
+    const q = { pair: 'XAUUSD', bid: candles[i].close, ask: candles[i].close + 0.3, spread: 3, timestamp: new Date() };
+    return {
+      pair: 'XAUUSD', candles, i, ind: computeIndicators(candles), quote: q, tfMinutes: 60, rewardRatio: 2,
+      slMinAtr: 0.5, slMaxAtr: 2, minAtrPips: 10, maxSpreadPips: 8, breakout: { ...params }, toUtc: (d: Date) => d, ...extra,
+    };
+  };
+  const flat = (n: number, start = Date.UTC(2026, 0, 5)): CandleData[] =>
+    Array.from({ length: n }, (_, k) => {
+      const base = 4000 + Math.sin(k / 3) * 5;
+      return { timestamp: new Date(start + k * 3600e3), open: base, high: base + 4, low: base - 4, close: base + 1, closed: true };
+    });
+
+  it('exposes all 13 strategies', () => {
+    expect(STRATEGY_NAMES).toHaveLength(13);
+  });
+
+  it('turtle20 buys the first close above the 20-bar high with a 2×ATR stop', () => {
+    const c = flat(240);
+    const last = c[c.length - 1];
+    c[c.length - 1] = { ...last, open: 4004, high: 4030, close: 4028 };
+    const ctx = ctxFor(c);
+    const r = evaluateStrategy('turtle20', ctx);
+    expect(isSignal(r)).toBe(true);
+    if (isSignal(r)) {
+      expect(r.side).toBe('BUY');
+      expect(r.entryPrice - r.stopLoss).toBeCloseTo(Math.min(2 * ctx.ind.atr14[ctx.i], 2 * ctx.ind.atr14[ctx.i]) + 0.3, 0);
+    }
+  });
+
+  it('volBreakout triggers once per day beyond open + 0.5 × yesterday range', () => {
+    const c = flat(240); // hourly → 10 days
+    const i = c.length - 1;
+    const day = c[i].timestamp.toISOString().slice(0, 10);
+    let first = i;
+    while (serverDayOf(c[first - 1]) === day) first--;
+    // make every earlier bar of today stay near the open
+    for (let j = first; j < i; j++) c[j] = { ...c[j], close: c[first].open };
+    c[i] = { ...c[i], high: c[first].open + 20, close: c[first].open + 15 };
+    const r = evaluateStrategy('volBreakout', ctxFor(c));
+    expect(isSignal(r) && r.side).toBe('BUY');
+    // a second breakout the same day is ignored
+    c[i - 1] = { ...c[i - 1], close: c[first].open + 12 };
+    expect(isSignal(evaluateStrategy('volBreakout', ctxFor(c)))).toBe(false);
+  });
+
+  it('ICT Silver Bullet only trades inside its NY windows', () => {
+    const c = flat(240);
+    const r = evaluateStrategy('ictSilverBullet', ctxFor(c, { toUtc: () => new Date('2026-01-14T18:00:00Z') })); // 13:00 NY
+    expect(isSignal(r)).toBe(false);
+    if (!isSignal(r)) expect(r.skip).toMatch(/Outside/);
+  });
+
+  function serverDayOf(x: CandleData): string {
+    return x.timestamp.toISOString().slice(0, 10);
+  }
+});
