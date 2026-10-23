@@ -7,6 +7,12 @@ const num = (value: string | undefined, fallback: number): number => {
   return value !== undefined && value.trim() !== '' && Number.isFinite(parsed) ? parsed : fallback;
 };
 
+/** "HH:MM" → minutes since midnight */
+function parseClock(value: string | undefined, fallback: string): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((value || fallback).trim()) ?? /^(\d{1,2}):(\d{2})$/.exec(fallback)!;
+  return Math.min(23, parseInt(m[1], 10)) * 60 + Math.min(59, parseInt(m[2], 10));
+}
+
 // FundedNext rule set (percentages are of the initial account balance).
 // Adjust MAX_LOSS_PERCENT / PROFIT_TARGET_PERCENT for your challenge type:
 //   1-Step = 6% max loss, 2-Step = 10% max loss, Lite = 8% max loss.
@@ -33,16 +39,27 @@ export const config = {
   isDevelopment: process.env.NODE_ENV === 'development',
   isProduction: process.env.NODE_ENV === 'production',
 
-  // API Keys
-  fundednextApiKey: process.env.FUNDEDNEXT_API_KEY || '',
-  fundednextAccountId: process.env.FUNDEDNEXT_ACCOUNT_ID || '',
-  groqApiKey: process.env.GROQ_API_KEY || '',
+  // Market data / execution
+  // sim = random-walk feed (offline testing), mt5 = real prices from the MT5 bridge
+  dataSource: (process.env.DATA_SOURCE || 'sim').toLowerCase() === 'mt5' ? ('mt5' as const) : ('sim' as const),
+  mt5BridgeUrl: (process.env.MT5_BRIDGE_URL || 'http://127.0.0.1:8765').replace(/\/+$/, ''),
+  mt5BridgeToken: process.env.MT5_BRIDGE_TOKEN || '',
+  mt5Magic: num(process.env.MT5_MAGIC, 260101),
+  mt5DeviationPoints: num(process.env.MT5_DEVIATION_POINTS, 30),
+  mt5TimeoutMs: num(process.env.MT5_TIMEOUT_MS, 10000),
+
+  // Groq — two keys from different accounts; switches to the next key on rate limit / auth errors
+  groqApiKeys: [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2]
+    .map((k) => (k || '').trim())
+    .filter((k) => k.length > 0 && !k.includes('your_') && k !== 'test_key_development'),
   groqModel: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
   groqBaseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
-  marketDataApiKey: process.env.MARKET_DATA_API_KEY || '',
+  groqMaxRetries: Math.max(0, num(process.env.GROQ_MAX_RETRIES, 2)),
+  groqTimeoutMs: num(process.env.GROQ_TIMEOUT_MS, 30000),
 
-  // Optional AI review of generated signals (off by default; strategy rules still run)
-  aiReviewEnabled: process.env.AI_REVIEW_ENABLED === 'true',
+  // AI review of every strategy signal (on by default). Fail-closed: no AI answer → no trade.
+  aiReviewEnabled: process.env.AI_REVIEW_ENABLED !== 'false',
+  aiFailOpen: process.env.AI_REVIEW_FAIL_MODE === 'open',
   aiMinConfidence: num(process.env.AI_MIN_CONFIDENCE, 0.55),
 
   // Account Configuration (FundedNext Stellar 2-Step)
@@ -80,17 +97,23 @@ export const config = {
   // 1 = current behaviour, >1 = bigger fake price swings for faster testing)
   simVolatility: Math.min(Math.max(num(process.env.SIM_VOLATILITY, 1), 0.1), 10),
 
-  // Trading Hours — interpreted in BOT_TIMEZONE, independent of server timezone
+  // Display timezone (logs, dashboard, daily reset)
   timezone: process.env.BOT_TIMEZONE || 'Asia/Kolkata',
-  londonOpenHour: num(process.env.LONDON_OPEN_HOUR, 13),
-  londonOpenMinute: num(process.env.LONDON_OPEN_MINUTE, 30),
-  londonCloseHour: num(process.env.LONDON_CLOSE_HOUR, 17),
-  londonCloseMinute: num(process.env.LONDON_CLOSE_MINUTE, 0),
 
-  // Risk Management
+  // Trading session — defined in London time so UK daylight saving is handled automatically.
+  // 08:00–11:30 London = 13:30–17:00 IST in winter (12:30–16:00 IST in summer).
+  sessionTimezone: process.env.SESSION_TIMEZONE || 'Europe/London',
+  sessionStart: parseClock(process.env.SESSION_START, '08:00'),
+  sessionEnd: parseClock(process.env.SESSION_END, '11:30'),
+
+  // Strategy
+  entryTimeframe: 'H1' as const,
+  rangeMode: (process.env.RANGE_MODE || 'rolling24h') === 'prevDay' ? ('prevDay' as const) : ('rolling24h' as const),
   minAtrPips: num(process.env.MIN_ATR_PIPS, 50),
-  profitRatio: num(process.env.PROFIT_RATIO, 2),
-  minWinRate: num(process.env.MIN_WIN_RATE, 0.7),
+  slMinAtr: num(process.env.SL_MIN_ATR, 0.5),
+  slMaxAtr: num(process.env.SL_MAX_ATR, 1.5),
+  maxSpreadPips: num(process.env.MAX_SPREAD_PIPS, 8),
+  profitRatio: 2,
 
   // Dashboard (web UI + JSON API)
   dashboardEnabled: process.env.DASHBOARD_ENABLED !== 'false',
@@ -100,9 +123,10 @@ export const config = {
   dashboardPassword: process.env.DASHBOARD_PASSWORD || '',
   dataDir: process.env.DATA_DIR || './data',
 
-  // Notifications
+  // Notifications (Telegram recommended: free push to phone)
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+  telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
-  emailRecipient: process.env.EMAIL_RECIPIENT || '',
 };
 
 export default config;

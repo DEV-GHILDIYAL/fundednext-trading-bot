@@ -4,7 +4,9 @@ import path from 'path';
 import crypto from 'crypto';
 import { config } from '../config';
 import { logger, getRecentLogs } from '../utils/logger';
-import { getZonedTime, formatClock, isWithinTradingSession } from '../utils/time';
+import { getZonedTime, formatClock, isWithinTradingSession, formatMinutes, sessionInDisplayZone } from '../utils/time';
+import { groqClient } from '../api/groq';
+import { notifier } from '../services/notifier';
 import { bot } from '../bot/bot';
 import { marketClient } from '../api/market';
 import { tradeExecutor } from '../services/tradeExecutor';
@@ -15,7 +17,6 @@ import { getPairSpec } from '../constants/pairs';
 import { Calculator } from '../utils/calculator';
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', '..', 'public');
-const pad = (n: number): string => String(n).padStart(2, '0');
 
 /** Everything the dashboard shows, in one JSON document */
 export function buildStatus(): Record<string, unknown> {
@@ -30,7 +31,7 @@ export function buildStatus(): Record<string, unknown> {
     generatedAt: new Date().toISOString(),
     clock: { date: now.dateKey, time: formatClock(now), timezone: config.timezone },
     mode: tradeExecutor.isDryRun ? 'PAPER' : 'LIVE',
-    dataSource: marketClient.isSimulated ? 'SIMULATED' : 'LIVE',
+    dataSource: marketClient.name,
     simVolatility: config.simVolatility,
     bot: {
       enabled: config.botEnabled,
@@ -39,10 +40,18 @@ export function buildStatus(): Record<string, unknown> {
     },
     session: {
       open: isWithinTradingSession(),
-      opens: `${pad(config.londonOpenHour)}:${pad(config.londonOpenMinute)}`,
-      closes: `${pad(config.londonCloseHour)}:${pad(config.londonCloseMinute)}`,
+      opens: sessionInDisplayZone()?.opens ?? formatMinutes(config.sessionStart),
+      closes: sessionInDisplayZone()?.closes ?? formatMinutes(config.sessionEnd),
+      london: `${formatMinutes(config.sessionStart)}–${formatMinutes(config.sessionEnd)} London`,
       days: 'Mon–Fri',
     },
+    ai: {
+      enabled: config.aiReviewEnabled,
+      failMode: config.aiFailOpen ? 'open' : 'closed',
+      model: groqClient.modelName,
+      ...groqClient.getStatus(),
+    },
+    notifications: { enabled: notifier.enabled },
     limits: {
       accountBalance: config.accountBalance,
       riskPercent: config.riskPercent,

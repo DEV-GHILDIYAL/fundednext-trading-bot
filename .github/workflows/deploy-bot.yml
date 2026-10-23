@@ -1,0 +1,53 @@
+name: Deploy bot (Ubuntu EC2)
+
+# Push to main → test → SSH into fundednext-bot-prod → pull, build, pm2 reload.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'bridge/**'
+      - 'scripts/windows/**'
+      - 'infra/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-bot
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets
+        id: check
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          if [ -z "$HOST" ]; then
+            echo "EC2_HOST secret not set — skipping deploy"; echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH
+        if: steps.check.outputs.skip != 'true'
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER || 'ubuntu' }}
+          KEY: ${{ secrets.EC2_SSH_KEY }}
+          APP_DIR: ${{ secrets.APP_DIR || '/home/ubuntu/fundednext-trading-bot' }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            "APP_DIR='$APP_DIR' BRANCH='$BRANCH' bash -s" < scripts/deploy-remote.sh
+
+      - name: Clean up key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

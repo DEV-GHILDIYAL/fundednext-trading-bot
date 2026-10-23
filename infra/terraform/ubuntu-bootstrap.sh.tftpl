@@ -1,0 +1,23 @@
+#!/bin/bash
+# First-boot script for a NEW Ubuntu bot instance (create_bot_instance = true).
+set -euxo pipefail
+exec > /var/log/fundednext-bootstrap.log 2>&1
+
+apt-get update
+apt-get install -y git curl ca-certificates
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+npm install -g pm2
+
+sudo -u ubuntu bash -lc '
+  set -e
+  cd /home/ubuntu
+  [ -d fundednext-trading-bot/.git ] || git clone --branch ${branch} ${repo_url} fundednext-trading-bot
+  cd fundednext-trading-bot
+  npm ci && npm run build
+  [ -f .env ] || cp .env.example .env
+  mkdir -p logs data
+'
+# pm2 survives reboots
+env PATH=$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu
+echo "Bootstrap done. Edit /home/ubuntu/fundednext-trading-bot/.env, then: pm2 start ecosystem.config.js && pm2 save"

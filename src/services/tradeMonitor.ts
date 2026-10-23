@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { Calculator } from '../utils/calculator';
@@ -18,6 +20,11 @@ export interface OpenTrade {
   /** P&L as % of the risked amount */
   pnlPercent: number;
   openedAt: Date;
+  /** MT5 position ticket (live trades only) */
+  ticket?: number;
+  lots?: number;
+  /** $ at risk if the stop is hit */
+  riskAmount?: number;
 }
 
 export type ExitReason = 'STOP_LOSS' | 'TAKE_PROFIT';
@@ -26,10 +33,48 @@ export class TradeMonitor {
   private openTrades: Map<string, OpenTrade> = new Map();
   /** SL/TP hit during the 30s Quick Strike lockout, to close once the lockout ends. */
   private pendingExits: Map<string, ExitReason> = new Map();
+  private readonly file: string | null;
+
+  /** @param dataDir where open trades are persisted (null = memory only, for tests) */
+  constructor(dataDir: string | null = config.dataDir) {
+    this.file = dataDir ? path.join(dataDir, 'open-trades.json') : null;
+  }
 
   registerTrade(trade: OpenTrade): void {
     this.openTrades.set(trade.tradeId, trade);
+    this.save();
     logger.info(`📌 Monitoring ${trade.type} ${trade.pair} (${trade.tradeId})`);
+  }
+
+  /**
+   * Re-load trades that were open when the process stopped (restart / deploy),
+   * so positions keep running until SL/TP instead of being closed on shutdown.
+   */
+  restore(): OpenTrade[] {
+    if (!this.file || !fs.existsSync(this.file)) return [];
+    try {
+      const rows = JSON.parse(fs.readFileSync(this.file, 'utf8')) as Array<OpenTrade & { openedAt: string }>;
+      for (const row of rows) {
+        this.openTrades.set(row.tradeId, { ...row, openedAt: new Date(row.openedAt) });
+      }
+      if (rows.length > 0) logger.info(`♻️ Restored ${rows.length} open trade(s) from ${this.file}`);
+      return this.getOpenTrades();
+    } catch (error) {
+      logger.warn('Could not restore open trades', error);
+      return [];
+    }
+  }
+
+  private save(): void {
+    if (!this.file) return;
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      const tmp = `${this.file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.getOpenTrades(), null, 2), 'utf8');
+      fs.renameSync(tmp, this.file);
+    } catch (error) {
+      logger.warn('Could not persist open trades', error);
+    }
   }
 
   /**
@@ -44,7 +89,7 @@ export class TradeMonitor {
 
     trade.currentPrice = trade.type === 'BUY' ? quote.bid : quote.ask;
     trade.pnl = Calculator.calculatePnL(trade.entryPrice, trade.currentPrice, trade.quantity, trade.type);
-    trade.pnlPercent = parseFloat(((trade.pnl / config.riskPerTrade) * 100).toFixed(1));
+    trade.pnlPercent = parseFloat(((trade.pnl / (trade.riskAmount || config.riskPerTrade)) * 100).toFixed(1));
 
     const ageMs = Date.now() - trade.openedAt.getTime();
     const minHoldMs = config.minTradeDurationSeconds * 1000;
@@ -105,6 +150,18 @@ export class TradeMonitor {
   removeTrade(tradeId: string): void {
     this.openTrades.delete(tradeId);
     this.pendingExits.delete(tradeId);
+    this.save();
+  }
+
+  /** Live mode: take P&L / price straight from the broker position */
+  applyBrokerUpdate(tradeId: string, update: { priceCurrent: number; profit: number; sl: number; tp: number }): void {
+    const trade = this.openTrades.get(tradeId);
+    if (!trade) return;
+    trade.currentPrice = update.priceCurrent;
+    trade.pnl = parseFloat(update.profit.toFixed(2));
+    trade.pnlPercent = parseFloat(((trade.pnl / (trade.riskAmount || config.riskPerTrade)) * 100).toFixed(1));
+    trade.stopLoss = update.sl || trade.stopLoss;
+    trade.takeProfit = update.tp || trade.takeProfit;
   }
 
   /** Total unrealized P&L of open trades */

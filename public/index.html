@@ -330,7 +330,8 @@
     const botBadge = !bot.enabled ? badge('BOT DISABLED', 'red') : bot.running ? badge('BOT RUNNING', 'green') : badge('BOT STOPPED', 'red');
     $('badges').innerHTML = botBadge +
       badge(d.mode, d.mode === 'LIVE' ? 'red' : 'blue') +
-      badge('DATA: ' + d.dataSource + (vol !== 1 ? ' ×' + vol : ''), d.dataSource === 'LIVE' ? 'green' : 'amber') +
+      badge('DATA: ' + d.dataSource + (d.dataSource === 'SIMULATED' && vol !== 1 ? ' ×' + vol : ''), d.dataSource === 'MT5' ? 'green' : 'amber') +
+      (d.ai ? badge('AI: ' + (d.ai.enabled ? (d.ai.lastError ? 'ERROR' : 'key #' + d.ai.activeKey + '/' + d.ai.keys) : 'OFF'), d.ai.enabled ? (d.ai.lastError ? 'red' : 'green') : '') : '') +
       badge('PHASE ' + d.phase.number + ' · ' + d.phase.targetPercent + '% TARGET', 'blue') +
       badge('DAYS ' + d.phase.tradingDays + '/' + d.phase.minTradingDays, d.phase.tradingDays >= d.phase.minTradingDays ? 'green' : 'amber') +
       badge(d.session.open ? 'SESSION OPEN' : 'SESSION CLOSED', d.session.open ? 'green' : '');
@@ -371,7 +372,7 @@
     $('kTotalSub').textContent = s.totalTrades + ' trades · Win rate ' + s.winRate + '%';
 
     // Market watch
-    $('sessionInfo').textContent = d.session.opens + '–' + d.session.closes + ' IST · ' + d.session.days;
+    $('sessionInfo').textContent = d.session.opens + '–' + d.session.closes + ' ' + (d.clock.timezone === 'Asia/Kolkata' ? 'IST' : d.clock.timezone) + ' (' + d.session.london + ') · ' + d.session.days;
     $('market').innerHTML = bot.pairs.map((p) => {
       const prev = lastBids.get(p.pair);
       const moved = active && typeof prev === 'number' && typeof p.bid === 'number' && p.bid !== prev;

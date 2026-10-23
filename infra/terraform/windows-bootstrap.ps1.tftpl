@@ -1,0 +1,40 @@
+<powershell>
+# First-boot script for the Windows MT5 host (rendered by Terraform).
+# Installs Git, clones the repo and hands over to scripts\windows\setup.ps1.
+$ErrorActionPreference = 'Stop'
+Start-Transcript -Path 'C:\fundednext-bootstrap.log' -Append
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ProgressPreference = 'SilentlyContinue'
+
+$Region = '${region}'
+$Prefix = '${ssm_prefix}'
+$RepoUrl = '${repo_url}'
+$Branch = '${branch}'
+$AppDir = 'C:\fundednext-bot'
+
+function Get-Param([string]$Name) {
+  try { return (Get-SSMParameter -Name "$Prefix/$Name" -WithDecryption $true -Region $Region).Value } catch { return '' }
+}
+
+if (-not (Test-Path 'C:\Program Files\Git\cmd\git.exe')) {
+  Write-Output 'Installing Git...'
+  $gitExe = Join-Path $env:TEMP 'git-setup.exe'
+  Invoke-WebRequest 'https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe' -OutFile $gitExe
+  Start-Process $gitExe -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP-' -Wait
+}
+$git = 'C:\Program Files\Git\cmd\git.exe'
+
+$token = Get-Param 'github_token'
+$cloneUrl = $RepoUrl
+if ($token) { $cloneUrl = $RepoUrl -replace '^https://', "https://x-access-token:$token@" }
+
+if (-not (Test-Path "$AppDir\.git")) {
+  & $git clone --branch $Branch $cloneUrl $AppDir
+} else {
+  & $git -C $AppDir pull
+}
+
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scripts\windows\setup.ps1" -Region $Region -Prefix $Prefix -BridgePort ${bridge_port}
+Stop-Transcript
+</powershell>
+<persist>false</persist>
