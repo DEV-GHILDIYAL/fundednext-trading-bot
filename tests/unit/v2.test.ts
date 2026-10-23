@@ -91,7 +91,7 @@ const quote = (bid: number, spreadPips = 3): PriceData => ({
   timestamp: new Date(),
 });
 
-const params = { minAtrPips: 50, maxSpreadPips: 8, slMinAtr: 0.5, slMaxAtr: 1.5, rewardRatio: 2 };
+const params = { minAtrPips: 50, maxSpreadPips: 8, slMinAtr: 0.5, slMaxAtr: 1.5, rewardRatio: 2, rangeBars: 24, usePriceAction: true };
 
 describe('EntrySignalGenerator (candle-close breakout)', () => {
   it('BUYs when a closed candle breaks the range and price holds', () => {
@@ -231,5 +231,28 @@ describe('TradeExecutor LIVE via bridge', () => {
     const r = await new TradeExecutor(false, market(true)).executeTrade(signal);
     expect(r.success).toBe(false);
     expect(r.message).toMatch(/DATA_SOURCE=mt5/);
+  });
+});
+
+describe('Strategy params', () => {
+  it('converts the 24h range to candles per timeframe', () => {
+    const { rangeBarsFor } = jest.requireActual('../../src/strategies/entrySignalGenerator');
+    expect(rangeBarsFor('H1', 24)).toBe(24);
+    expect(rangeBarsFor('M30', 24)).toBe(48);
+    expect(rangeBarsFor('M15', 24)).toBe(96);
+  });
+
+  it('skips the price-action check when usePriceAction is false', () => {
+    // Bearish recent closes → price action DOWN, but the breakout is UP
+    const c = rangeCandles(4016);
+    for (let i = c.length - 6; i < c.length - 1; i++) c[i].close = 4000 - (i - (c.length - 6));
+    c[c.length - 2].close = 3995;
+    const withPa = EntrySignalGenerator.generateTradeSignal({ pair: 'XAUUSD', quote: quote(4017), candles: c, atrPips: 200 }, params);
+    const noPa = EntrySignalGenerator.generateTradeSignal(
+      { pair: 'XAUUSD', quote: quote(4017), candles: c, atrPips: 200 },
+      { ...params, usePriceAction: false }
+    );
+    expect(withPa.signal).toBe('SKIP');
+    expect(noPa.signal).toBe('BUY');
   });
 });

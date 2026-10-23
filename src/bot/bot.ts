@@ -1,9 +1,9 @@
 import { logger } from '../utils/logger';
-import { config } from '../config';
+import { config, TIMEFRAME_MINUTES } from '../config';
 import { marketClient, PriceData, CandleData, computeAtrPips } from '../api/market';
 import { mt5Bridge } from '../api/mt5Bridge';
 import { groqClient, GroqUnavailableError } from '../api/groq';
-import { EntrySignalGenerator, TradeSignal, MIN_CLOSED_CANDLES } from '../strategies/entrySignalGenerator';
+import { EntrySignalGenerator, TradeSignal, defaultStrategyParams, minClosedCandles } from '../strategies/entrySignalGenerator';
 import { tradeExecutor } from '../services/tradeExecutor';
 import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
 import { riskManager } from '../services/riskManager';
@@ -14,8 +14,9 @@ import { PAIR_LIST, TradingPair, getPairSpec } from '../constants/pairs';
 import { getZonedTime, formatClock, isWithinTradingSession, isWeekend } from '../utils/time';
 
 const HOUR_MS = 60 * 60 * 1000;
-/** A breakout candle is only traded within this many minutes after it closes */
-export const ENTRY_WINDOW_MINUTES = 15;
+const TF_MS = TIMEFRAME_MINUTES[config.entryTimeframe] * 60 * 1000;
+/** A breakout candle is only traded within this many minutes after it closes (max half a candle) */
+export const ENTRY_WINDOW_MINUTES = Math.min(15, TIMEFRAME_MINUTES[config.entryTimeframe] / 2);
 
 export interface PairSnapshot {
   pair: string;
@@ -260,17 +261,19 @@ export class TradingBot {
     }
     this.lastRiskReason = '';
 
-    const candles = await marketClient.getCandles(pair, 'H1', 60);
+    const params = defaultStrategyParams();
+    const needed = minClosedCandles(params.rangeBars);
+    const candles = await marketClient.getCandles(pair, config.entryTimeframe, needed + 40);
     const closed = candles.filter((c) => c.closed !== false);
-    if (closed.length < MIN_CLOSED_CANDLES) {
-      this.updatePair(pair, { status: `Warming up (${closed.length}/${MIN_CLOSED_CANDLES} candles)` });
+    if (closed.length < needed) {
+      this.updatePair(pair, { status: `Warming up (${closed.length}/${needed} candles)` });
       return;
     }
 
     const spec = getPairSpec(pair);
     const atrPips = computeAtrPips(closed, spec.pipSize, 14);
     const range = config.rangeMode === 'prevDay' ? await this.previousDayRange(pair) : undefined;
-    const rangeBars = closed.slice(-25, -1);
+    const rangeBars = closed.slice(-(params.rangeBars + 1), -1);
     const prevHigh = range?.high ?? Math.max(...rangeBars.map((c) => c.high));
     const prevLow = range?.low ?? Math.min(...rangeBars.map((c) => c.low));
     this.updatePair(pair, { prevHigh, prevLow, atrPips });
@@ -278,7 +281,7 @@ export class TradingBot {
     const last = closed[closed.length - 1];
     const candleKey = last.timestamp.toISOString();
     if (this.evaluatedCandle.get(pair) === candleKey) {
-      this.updatePair(pair, { status: 'Waiting for next 1H candle close' });
+      this.updatePair(pair, { status: `Waiting for next ${config.entryTimeframe} candle close` });
       return;
     }
 
@@ -290,7 +293,7 @@ export class TradingBot {
       return;
     }
 
-    const signal = EntrySignalGenerator.generateTradeSignal({ pair, quote: price, candles: closed, atrPips, range });
+    const signal = EntrySignalGenerator.generateTradeSignal({ pair, quote: price, candles: closed, atrPips, range }, params);
     if (signal.signal === 'SKIP') {
       // A wide spread can be temporary: allow a re-check within the entry window
       if (!/^Skipped: Spread/.test(signal.reasoning)) this.evaluatedCandle.set(pair, candleKey);
@@ -346,7 +349,7 @@ export class TradingBot {
     );
   }
 
-  /** Minutes since the given closed 1H candle closed (handles the MT5 server-time offset) */
+  /** Minutes since the given closed candle closed (handles the MT5 server-time offset) */
   private candleCloseAgeMinutes(candle: CandleData, quote: PriceData): number {
     let offsetMs = 0;
     if (!marketClient.isSimulated) {
@@ -354,7 +357,7 @@ export class TradingBot {
       const raw = quote.timestamp.getTime() - Date.now();
       offsetMs = Math.round(raw / (30 * 60 * 1000)) * 30 * 60 * 1000;
     }
-    const closeAt = candle.timestamp.getTime() + HOUR_MS - offsetMs;
+    const closeAt = candle.timestamp.getTime() + TF_MS - offsetMs;
     return (Date.now() - closeAt) / 60000;
   }
 
@@ -380,8 +383,8 @@ export class TradingBot {
       `Stop loss: ${signal.stopLoss}`,
       `Take profit: ${signal.takeProfit}`,
       `Risk/reward: 1:${signal.riskRewardRatio}`,
-      `Broken range (last 24 H1): ${signal.meta?.rangeLow} – ${signal.meta?.rangeHigh}`,
-      `ATR(14, H1): ${atrPips.toFixed(1)} pips | spread ${signal.meta?.spreadPips} pips`,
+      `Broken range (${config.rangeMode === 'prevDay' ? 'previous day' : `last ${config.rangeHours}h`}): ${signal.meta?.rangeLow} – ${signal.meta?.rangeHigh}`,
+      `ATR(14, ${config.entryTimeframe}): ${atrPips.toFixed(1)} pips | spread ${signal.meta?.spreadPips} pips`,
       `Breakout strength: ${signal.components.breakout.strength}/100`,
       `Price action: ${signal.components.priceAction.pattern} (${signal.components.priceAction.direction})`,
       `Nearest support: ${signal.components.supportResistance.support?.level ?? 'none'}`,

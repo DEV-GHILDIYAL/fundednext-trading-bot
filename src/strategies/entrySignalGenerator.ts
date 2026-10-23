@@ -5,7 +5,7 @@ import { PriceActionAnalyzer, PriceActionSignal } from './priceAction';
 import { CandleData, PriceData } from '../api/market';
 import { Validator } from '../utils/validator';
 import { getPairSpec, roundPrice } from '../constants/pairs';
-import { config } from '../config';
+import { config, EntryTimeframe, TIMEFRAME_MINUTES } from '../config';
 
 export interface TradeSignal {
   pair: string;
@@ -35,10 +35,10 @@ export interface TradeSignal {
 export interface SignalInput {
   pair: string;
   quote: PriceData;
-  /** 1H candles, oldest first. A forming last bar (closed === false) is ignored. */
+  /** Entry-timeframe candles, oldest first. A forming last bar (closed === false) is ignored. */
   candles: CandleData[];
   atrPips: number;
-  /** Range to break. Omit to use the 24 closed candles before the breakout candle. */
+  /** Range to break. Omit to use the `rangeBars` closed candles before the breakout candle. */
   range?: { high: number; low: number };
 }
 
@@ -48,11 +48,23 @@ export interface StrategyParams {
   slMinAtr: number;
   slMaxAtr: number;
   rewardRatio: number;
+  /** Candles in the breakout range (rolling mode) */
+  rangeBars: number;
+  /** Require price action to agree with the breakout */
+  usePriceAction: boolean;
 }
 
-export const RANGE_CANDLES = 24;
-export const MIN_CLOSED_CANDLES = RANGE_CANDLES + 2;
 const SR_SEARCH_RANGE_PIPS = 50;
+
+/** Closed candles needed before a signal can be evaluated */
+export function minClosedCandles(rangeBars: number): number {
+  return rangeBars + 2;
+}
+
+/** Range length in candles for a timeframe (e.g. 24h of M15 = 96) */
+export function rangeBarsFor(timeframe: EntryTimeframe = config.entryTimeframe, hours: number = config.rangeHours): number {
+  return Math.round((hours * 60) / TIMEFRAME_MINUTES[timeframe]);
+}
 
 export function defaultStrategyParams(): StrategyParams {
   return {
@@ -61,8 +73,14 @@ export function defaultStrategyParams(): StrategyParams {
     slMinAtr: config.slMinAtr,
     slMaxAtr: config.slMaxAtr,
     rewardRatio: config.profitRatio,
+    rangeBars: rangeBarsFor(),
+    usePriceAction: config.usePriceAction,
   };
 }
+
+/** @deprecated kept for older imports: 24 × 1H candles */
+export const RANGE_CANDLES = 24;
+export const MIN_CLOSED_CANDLES = minClosedCandles(RANGE_CANDLES);
 
 /**
  * London breakout on candle CLOSE:
@@ -86,13 +104,14 @@ export class EntrySignalGenerator {
 
     const spec = getPairSpec(pair);
     const closed = input.candles.filter((c) => c.closed !== false);
-    if (closed.length < MIN_CLOSED_CANDLES) {
-      return this.skipSignal(pair, `Not enough candles (${closed.length}/${MIN_CLOSED_CANDLES})`);
+    const needed = minClosedCandles(params.rangeBars);
+    if (closed.length < needed) {
+      return this.skipSignal(pair, `Not enough candles (${closed.length}/${needed})`);
     }
 
     const breakoutCandle = closed[closed.length - 1];
     const prevCandle = closed[closed.length - 2];
-    const rangeBars = closed.slice(-(RANGE_CANDLES + 1), -1);
+    const rangeBars = closed.slice(-(params.rangeBars + 1), -1);
     const rangeHigh = input.range?.high ?? Math.max(...rangeBars.map((c) => c.high));
     const rangeLow = input.range?.low ?? Math.min(...rangeBars.map((c) => c.low));
     const candleTime = breakoutCandle.timestamp.toISOString();
@@ -133,7 +152,7 @@ export class EntrySignalGenerator {
 
     // 3. Price action agrees
     const priceAction = PriceActionAnalyzer.generateSignal(closed, atrPips, spec.pipSize);
-    if (priceAction.direction !== direction) {
+    if (params.usePriceAction && priceAction.direction !== direction) {
       return this.skipSignal(pair, `Price action ${priceAction.direction} vs breakout ${direction}`, candleTime);
     }
 
@@ -182,7 +201,7 @@ export class EntrySignalGenerator {
       riskRewardRatio: params.rewardRatio,
       confidence: parseFloat(confidence.toFixed(2)),
       reasoning:
-        `${side} ${pair}: 1H close ${breakoutCandle.close} beyond range ${rangeLow}–${rangeHigh}. ` +
+        `${side} ${pair}: candle close ${breakoutCandle.close} beyond range ${rangeLow}–${rangeHigh}. ` +
         `ATR ${atrPips.toFixed(0)} pips, SL ${(slDistance / spec.pipSize).toFixed(0)} pips, pattern ${priceAction.pattern}. ` +
         `R:R 1:${params.rewardRatio}`,
       candleTime,

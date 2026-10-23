@@ -13,6 +13,14 @@ function parseClock(value: string | undefined, fallback: string): number {
   return Math.min(23, parseInt(m[1], 10)) * 60 + Math.min(59, parseInt(m[2], 10));
 }
 
+export type EntryTimeframe = 'M15' | 'M30' | 'H1';
+export const TIMEFRAME_MINUTES: Record<EntryTimeframe, number> = { M15: 15, M30: 30, H1: 60 };
+
+function parseTimeframe(value: string | undefined): EntryTimeframe {
+  const tf = (value || 'H1').toUpperCase();
+  return tf === 'M15' || tf === 'M30' ? tf : 'H1';
+}
+
 // FundedNext rule set (percentages are of the initial account balance).
 // Adjust MAX_LOSS_PERCENT / PROFIT_TARGET_PERCENT for your challenge type:
 //   1-Step = 6% max loss, 2-Step = 10% max loss, Lite = 8% max loss.
@@ -107,13 +115,19 @@ export const config = {
   sessionEnd: parseClock(process.env.SESSION_END, '11:30'),
 
   // Strategy
-  entryTimeframe: 'H1' as const,
+  // Candle timeframe for entries: H1 (default), M30 or M15
+  entryTimeframe: parseTimeframe(process.env.ENTRY_TIMEFRAME),
+  // Breakout range length in hours (rolling mode)
+  rangeHours: Math.max(1, num(process.env.RANGE_HOURS, 24)),
+  // Require the price-action filter to agree with the breakout
+  usePriceAction: process.env.USE_PRICE_ACTION !== 'false',
   rangeMode: (process.env.RANGE_MODE || 'rolling24h') === 'prevDay' ? ('prevDay' as const) : ('rolling24h' as const),
   minAtrPips: num(process.env.MIN_ATR_PIPS, 50),
   slMinAtr: num(process.env.SL_MIN_ATR, 0.5),
   slMaxAtr: num(process.env.SL_MAX_ATR, 1.5),
   maxSpreadPips: num(process.env.MAX_SPREAD_PIPS, 8),
-  profitRatio: 2,
+  // Reward:risk (TP = ratio × SL distance)
+  profitRatio: Math.min(Math.max(num(process.env.PROFIT_RATIO, 2), 1), 5),
 
   // Dashboard (web UI + JSON API)
   dashboardEnabled: process.env.DASHBOARD_ENABLED !== 'false',
