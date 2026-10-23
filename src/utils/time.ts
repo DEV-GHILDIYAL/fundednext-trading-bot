@@ -92,3 +92,8 @@ export function sessionInDisplayZone(now: Date = new Date()): { opens: string; c
 export function formatClock(t: ZonedTime): string {
   return `${String(t.hour).padStart(2, '0')}:${String(t.minute).padStart(2, '0')}`;
 }
+
+/** Inside the session of at least one portfolio strategy (STRATEGIES) */
+export function isAnySleeveInSession(date: Date = new Date()): boolean {
+  return config.sleeves.some((s) => isWithinTradingSession(date, s.sessionStart, s.sessionEnd));
+}

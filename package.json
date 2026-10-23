@@ -14,6 +14,7 @@
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "type-check": "tsc --noEmit",
     "backtest": "ts-node scripts/backtest.ts",
+    "ai-audit": "ts-node scripts/aiAudit.ts",
     "test:bridge": "cd bridge && BRIDGE_MOCK=1 BRIDGE_TOKEN=test python -m pytest -q"
   },
   "keywords": [

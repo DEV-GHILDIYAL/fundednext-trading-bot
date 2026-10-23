@@ -33,6 +33,22 @@ plus objective versions of educators' setups: `turtle20`/`turtle55` (Turtle, Alg
 `pinBar` (Nial Fuller), `raynerEma` (Rayner Teo), `ictSilverBullet` (ICT), `casperSmc` (Casper SMC).
 Compare them on real MT5 history: `npm run backtest -- --strategies` (ranked, with in-sample / out-of-sample split).
 
+### Portfolio mode (recommended)
+
+`STRATEGIES=` trades several strategies together. Only one position is open at a time, `MAX_TRADES_PER_DAY` is shared, and the first signal wins:
+
+```
+STRATEGIES=asianBreakout:M30:2, volBreakout:M30:2, nyOpenBreakout:M15:2, insideDayBreakout:H1:2
+```
+
+- `nyOpenBreakout`: takes the first close beyond the 08:30–09:30 New York range (± 5% of the range) between 09:30 and 12:00 NY. The range must be 0.15–1.0 × D1 ATR. SL is the other side of the range, capped at 0.6 × D1 ATR. No trades on FOMC days.
+- `insideDayBreakout`: needs yesterday to be an inside day or NR4 with range < ATR40(D1). Trades a close beyond yesterday's high/low ± 0.1 × D1 ATR in the SMA5 direction. SL is 1 × D1 ATR.
+- Filters:
+  - **News blackout** (`NEWS_FILTER=true`): no new entries from 15 min before to 30 min after US tier-1 news (60 min after FOMC). Uses the ForexFactory feed plus a built-in NFP/FOMC schedule.
+  - asianBreakout skips Asian ranges outside 0.10–0.80 × D1 ATR.
+- `npm run backtest -- --portfolio` simulates exactly this: each strategy with filters ON vs OFF, the combined portfolio, and Monte Carlo pass odds for both phases. Add `--why` to see skip reasons.
+- `npm run ai-audit` replays every Groq-approved and Groq-rejected signal (`data/ai-reviews.jsonl`) on MT5 candles, to show whether the AI veto adds value.
+
 ### Breakout rules (summary — full rules in the project's `STRATEGY.md`)
 
 - **XAUUSD only**, London session **08:00–11:30 London time** (13:30–17:00 IST in winter, DST automatic)

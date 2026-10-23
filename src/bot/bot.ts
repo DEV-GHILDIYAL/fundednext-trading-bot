@@ -1,11 +1,13 @@
 import { logger } from '../utils/logger';
-import { config, TIMEFRAME_MINUTES, EntryTimeframe } from '../config';
+import { config, TIMEFRAME_MINUTES, EntryTimeframe, Sleeve } from '../config';
 import { marketClient, PriceData, CandleData, computeAtrPips } from '../api/market';
 import { mt5Bridge } from '../api/mt5Bridge';
 import { groqClient, GroqUnavailableError } from '../api/groq';
-import { EntrySignalGenerator, TradeSignal, StrategyParams, defaultStrategyParams, minClosedCandles } from '../strategies/entrySignalGenerator';
+import { EntrySignalGenerator, TradeSignal, StrategyParams, defaultStrategyParams, minClosedCandles, rangeBarsFor } from '../strategies/entrySignalGenerator';
 import { computeIndicators, INDICATOR_WARMUP } from '../strategies/indicators';
 import { evaluateStrategy, isSignal, HTF_FOR } from '../strategies/library';
+import { newsCalendar } from '../strategies/news';
+import { logAiReview } from '../services/aiReviewLog';
 import { tradeExecutor } from '../services/tradeExecutor';
 import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
 import { riskManager } from '../services/riskManager';
@@ -13,12 +15,12 @@ import { tradeJournal } from '../services/tradeJournal';
 import { notifier } from '../services/notifier';
 import { Calculator } from '../utils/calculator';
 import { PAIR_LIST, TradingPair, getPairSpec } from '../constants/pairs';
-import { getZonedTime, formatClock, isWithinTradingSession, isWeekend } from '../utils/time';
+import { getZonedTime, formatClock, isWithinTradingSession, isAnySleeveInSession, isWeekend } from '../utils/time';
 
 const HOUR_MS = 60 * 60 * 1000;
-const TF_MS = TIMEFRAME_MINUTES[config.entryTimeframe] * 60 * 1000;
-/** A breakout candle is only traded within this many minutes after it closes (max half a candle) */
-export const ENTRY_WINDOW_MINUTES = Math.min(15, TIMEFRAME_MINUTES[config.entryTimeframe] / 2);
+const tfMs = (tf: EntryTimeframe): number => TIMEFRAME_MINUTES[tf] * 60 * 1000;
+/** A signal candle is only traded within this many minutes after it closes (max half a candle) */
+export const entryWindowMinutes = (tf: EntryTimeframe): number => Math.min(15, TIMEFRAME_MINUTES[tf] / 2);
 
 export interface PairSnapshot {
   pair: string;
@@ -96,7 +98,7 @@ export class TradingBot {
     return {
       running: this.isRunning,
       cycle: this.currentCycle,
-      inSession: isWithinTradingSession(),
+      inSession: isAnySleeveInSession(),
       startedAt: this.startedAt?.toISOString() ?? null,
       lastCycleAt: this.lastCycleAt?.toISOString() ?? null,
       dataFeedOk: this.feedOk,
@@ -144,6 +146,9 @@ export class TradingBot {
     );
     logger.info(`Trading pairs: ${PAIR_LIST.join(', ')}`);
     logger.info(
+      `Strategies: ${config.sleeves.map((s) => `${s.id} 1:${s.rewardRatio}`).join(' | ')} | news filter ${config.newsFilter ? 'ON' : 'OFF'}`
+    );
+    logger.info(
       `Rules: max ${config.maxTradesPerDay}/day | risk ${config.riskPercent}% ($${config.riskPerTrade}) | ` +
         `1:${config.profitRatio} RR | exits: SL/TP only | min hold ${config.minTradeDurationSeconds}s`
     );
@@ -165,7 +170,7 @@ export class TradingBot {
       const started = Date.now();
 
       try {
-        const inSession = isWithinTradingSession();
+        const inSession = isAnySleeveInSession();
         this.logSessionChange(inSession);
 
         if (tradeMonitor.getOpenTrades().length > 0 && !isWeekend()) {
@@ -206,7 +211,7 @@ export class TradingBot {
     this.lastSessionState = inSession;
     const now = formatClock(getZonedTime());
     if (inSession) {
-      logger.info(`📈 London session OPEN (${now} ${config.timezone}) — scanning ${PAIR_LIST.join(', ')}`);
+      logger.info(`📈 Trading window OPEN (${now} ${config.timezone}) — scanning ${PAIR_LIST.join(', ')}`);
     } else {
       logger.info(`⏸️ Outside trading session (${now} ${config.timezone}) — open trades stay on SL/TP`);
     }
@@ -263,14 +268,27 @@ export class TradingBot {
     }
     this.lastRiskReason = '';
 
-    const params = defaultStrategyParams();
-    const useLibrary = config.strategy !== 'breakout';
+    const now = new Date();
+    const active = config.sleeves.filter((sl) => isWithinTradingSession(now, sl.sessionStart, sl.sessionEnd));
+    const statuses: string[] = [];
+    for (const sleeve of active) {
+      const opened = await this.scanSleeve(pair, price, sleeve, statuses);
+      if (opened) return; // one position at a time
+    }
+    if (statuses.length > 0) this.updatePair(pair, { status: statuses.join(' | ') });
+  }
+
+  /** Evaluate one portfolio strategy on its own timeframe; true when a trade was opened */
+  private async scanSleeve(pair: TradingPair, price: PriceData, sleeve: Sleeve, statuses: string[]): Promise<boolean> {
+    const status = (text: string) => statuses.push(config.sleeves.length > 1 ? `${sleeve.id}: ${text}` : text);
+    const params = { ...defaultStrategyParams(), rangeBars: rangeBarsFor(sleeve.timeframe), rewardRatio: sleeve.rewardRatio };
+    const useLibrary = sleeve.strategy !== 'breakout';
     const needed = useLibrary ? INDICATOR_WARMUP + 5 : minClosedCandles(params.rangeBars);
-    const candles = await marketClient.getCandles(pair, config.entryTimeframe, needed + 40);
+    const candles = await marketClient.getCandles(pair, sleeve.timeframe, needed + 40);
     const closed = candles.filter((c) => c.closed !== false);
     if (closed.length < needed) {
-      this.updatePair(pair, { status: `Warming up (${closed.length}/${needed} candles)` });
-      return;
+      status(`Warming up (${closed.length}/${needed} candles)`);
+      return false;
     }
 
     const spec = getPairSpec(pair);
@@ -283,49 +301,67 @@ export class TradingBot {
 
     const last = closed[closed.length - 1];
     const candleKey = last.timestamp.toISOString();
-    if (this.evaluatedCandle.get(pair) === candleKey) {
-      this.updatePair(pair, { status: `Waiting for next ${config.entryTimeframe} candle close` });
-      return;
+    const evalKey = `${pair}|${sleeve.id}`;
+    if (this.evaluatedCandle.get(evalKey) === candleKey) {
+      status(`waiting for next ${sleeve.timeframe} close`);
+      return false;
     }
 
     // Only act on a candle that closed in the last few minutes (e.g. not one from before a restart)
-    const ageMin = this.candleCloseAgeMinutes(last, price);
-    if (ageMin > ENTRY_WINDOW_MINUTES) {
-      this.evaluatedCandle.set(pair, candleKey);
-      this.updatePair(pair, { status: `Last candle closed ${ageMin.toFixed(0)} min ago — waiting for next close` });
-      return;
+    const ageMin = this.candleCloseAgeMinutes(last, price, sleeve.timeframe);
+    if (ageMin > entryWindowMinutes(sleeve.timeframe)) {
+      this.evaluatedCandle.set(evalKey, candleKey);
+      status(`last candle closed ${ageMin.toFixed(0)} min ago — waiting`);
+      return false;
     }
 
     const signal = useLibrary
-      ? await this.librarySignal(pair, price, closed, params)
+      ? await this.librarySignal(pair, price, closed, params, sleeve)
       : EntrySignalGenerator.generateTradeSignal({ pair, quote: price, candles: closed, atrPips, range }, params);
     if (signal.signal === 'SKIP') {
       // A wide spread can be temporary: allow a re-check within the entry window
-      if (!/^Skipped: Spread/.test(signal.reasoning)) this.evaluatedCandle.set(pair, candleKey);
-      this.updatePair(pair, { status: signal.reasoning.replace(/^Skipped:\s*/, '') });
-      return;
+      if (!/^Skipped: Spread/.test(signal.reasoning)) this.evaluatedCandle.set(evalKey, candleKey);
+      status(signal.reasoning.replace(/^Skipped:\s*/, ''));
+      return false;
     }
 
-    const verdict = await this.reviewWithAI(signal, atrPips);
+    const review = await this.reviewWithAI(signal, atrPips, sleeve);
+    const verdict = review.verdict;
+    const record = {
+      at: new Date().toISOString(),
+      sleeve: sleeve.id,
+      pair,
+      side: signal.signal,
+      entry: signal.entryPrice,
+      sl: signal.stopLoss,
+      tp: signal.takeProfit,
+      verdict,
+      aiDecision: review.decision,
+      confidence: review.confidence,
+      reasoning: review.reasoning,
+    };
     if (verdict === 'unavailable') {
       // Fail-closed: no trade now; retried next cycle while still inside the entry window
-      this.updatePair(pair, { status: 'AI review unavailable — trade skipped (retrying)' });
-      return;
+      status('AI review unavailable — trade skipped (retrying)');
+      return false;
     }
-    this.evaluatedCandle.set(pair, candleKey);
+    this.evaluatedCandle.set(evalKey, candleKey);
     if (verdict === 'rejected') {
-      this.updatePair(pair, { status: 'AI review rejected signal' });
-      return;
+      logAiReview({ ...record, traded: false });
+      status('AI review rejected signal');
+      return false;
     }
 
     const result = await tradeExecutor.executeTrade(signal);
     if (!result.success || !result.tradeId || !result.quantity || result.executedPrice === undefined) {
       const reason = result.error ?? result.message;
-      this.updatePair(pair, { status: `Order rejected: ${reason}` });
+      logAiReview({ ...record, traded: false });
+      status(`Order rejected: ${reason}`);
       logger.warn(`Trade not opened for ${pair}: ${reason}`);
       void notifier.notify('error', `Order for ${signal.signal} ${pair} rejected: ${reason}`, `order-reject-${reason}`, 30 * 60 * 1000);
-      return;
+      return false;
     }
+    logAiReview({ ...record, traded: true });
 
     const trade: OpenTrade = {
       tradeId: result.tradeId,
@@ -346,12 +382,13 @@ export class TradingBot {
     tradeMonitor.registerTrade(trade);
     tradeJournal.recordOpen(trade);
     riskManager.recordTradeOpened();
-    this.updatePair(pair, { status: `${trade.type} opened` });
+    this.updatePair(pair, { status: `${trade.type} opened [${sleeve.id}]` });
     void notifier.notify(
       'info',
-      `${tradeExecutor.isDryRun ? '[PAPER] ' : ''}${trade.type} ${result.lots} lot ${pair} @ ${trade.entryPrice}\n` +
+      `${tradeExecutor.isDryRun ? '[PAPER] ' : ''}${trade.type} ${result.lots} lot ${pair} @ ${trade.entryPrice} [${sleeve.id}]\n` +
         `SL ${trade.stopLoss} | TP ${trade.takeProfit} | risk $${result.riskAmount}`
     );
+    return true;
   }
 
   /** Minutes since the given closed candle closed (handles the MT5 server-time offset) */
@@ -363,8 +400,8 @@ export class TradingBot {
   }
 
   /** Minutes since the given closed candle closed */
-  private candleCloseAgeMinutes(candle: CandleData, quote: PriceData): number {
-    const closeAt = candle.timestamp.getTime() + TF_MS - this.serverOffsetMs(quote);
+  private candleCloseAgeMinutes(candle: CandleData, quote: PriceData, tf: EntryTimeframe): number {
+    const closeAt = candle.timestamp.getTime() + tfMs(tf) - this.serverOffsetMs(quote);
     return (Date.now() - closeAt) / 60000;
   }
 
@@ -373,42 +410,47 @@ export class TradingBot {
    * supertrend → HTF Supertrend direction, emaRangeBreakout → sign(HTF close − EMA200),
    * using the last HTF candle that had closed when the entry candle closed.
    */
-  private async higherTimeframeTrend(pair: string, entryCandle: CandleData): Promise<number | undefined> {
-    const htfTf = HTF_FOR[config.strategy]?.[config.entryTimeframe] as EntryTimeframe | undefined;
+  private async higherTimeframeTrend(pair: string, entryCandle: CandleData, sleeve: Sleeve): Promise<number | undefined> {
+    const htfTf = HTF_FOR[sleeve.strategy]?.[sleeve.timeframe] as EntryTimeframe | undefined;
     if (!htfTf) return undefined;
     const htf = (await marketClient.getCandles(pair, htfTf, INDICATOR_WARMUP + 30)).filter((c) => c.closed !== false);
-    const entryClose = entryCandle.timestamp.getTime() + TF_MS;
+    const entryClose = entryCandle.timestamp.getTime() + tfMs(sleeve.timeframe);
     const htfMs = TIMEFRAME_MINUTES[htfTf] * 60000;
     let j = htf.length - 1;
     while (j >= 0 && htf[j].timestamp.getTime() + htfMs > entryClose) j--;
     if (j < 0) return undefined;
     const ind = computeIndicators(htf);
-    if (config.strategy === 'supertrend') return ind.stDir[j];
+    if (sleeve.strategy === 'supertrend') return ind.stDir[j];
     return Number.isFinite(ind.ema200[j]) ? Math.sign(htf[j].close - ind.ema200[j]) : undefined;
   }
 
   /** Signal from the strategy library (STRATEGY other than breakout), as a TradeSignal */
-  private async librarySignal(pair: string, quote: PriceData, closed: CandleData[], params: StrategyParams): Promise<TradeSignal> {
+  private async librarySignal(pair: string, quote: PriceData, closed: CandleData[], params: StrategyParams, sleeve: Sleeve): Promise<TradeSignal> {
     const i = closed.length - 1;
     const offset = this.serverOffsetMs(quote);
     const candleTime = closed[i].timestamp.toISOString();
-    const htfDir = await this.higherTimeframeTrend(pair, closed[i]);
-    const r = evaluateStrategy(config.strategy, {
+    const htfDir = await this.higherTimeframeTrend(pair, closed[i], sleeve);
+    const daily = await this.dailyContext(pair, closed[i]);
+    const newsBlock = config.newsFilter ? await newsCalendar.check(new Date()) : null;
+    const tfMin = TIMEFRAME_MINUTES[sleeve.timeframe];
+    const r = evaluateStrategy(sleeve.strategy, {
       pair,
       candles: closed,
       i,
       ind: computeIndicators(closed),
       quote,
-      tfMinutes: TIMEFRAME_MINUTES[config.entryTimeframe],
-      rewardRatio: config.profitRatio,
+      tfMinutes: tfMin,
+      rewardRatio: sleeve.rewardRatio,
       slMinAtr: config.slMinAtr,
       slMaxAtr: config.slMaxAtr,
       // MIN_ATR_PIPS is the H1 value; scale by √time like the backtest (M30 ≈ 0.71×, M15 = 0.5×)
-      minAtrPips: config.minAtrPips * Math.sqrt(TIMEFRAME_MINUTES[config.entryTimeframe] / 60),
+      minAtrPips: config.minAtrPips * Math.sqrt(tfMin / 60),
       maxSpreadPips: config.maxSpreadPips,
       breakout: params,
       toUtc: (d) => new Date(d.getTime() - offset),
       htfDir,
+      daily,
+      newsBlock,
     });
     if (!isSignal(r)) return EntrySignalGenerator.skipSignal(pair, r.skip, candleTime);
     if (r.exit === 'supertrend') {
@@ -418,16 +460,16 @@ export class TradingBot {
 
     const base = EntrySignalGenerator.skipSignal(pair, '', candleTime);
     const dir = r.side === 'BUY' ? 'UP' : 'DOWN';
-    logger.info(`🎯 Signal ${r.side} ${pair} [${config.strategy}]`, { entry: r.entryPrice, sl: r.stopLoss, tp: r.takeProfit, candle: candleTime });
+    logger.info(`🎯 Signal ${r.side} ${pair} [${sleeve.id}]`, { entry: r.entryPrice, sl: r.stopLoss, tp: r.takeProfit, candle: candleTime });
     return {
       ...base,
       signal: r.side,
       entryPrice: r.entryPrice,
       stopLoss: r.stopLoss,
       takeProfit: r.takeProfit,
-      riskRewardRatio: config.profitRatio,
+      riskRewardRatio: sleeve.rewardRatio,
       confidence: 0.6,
-      reasoning: `[${config.strategy}] ${r.reason}`,
+      reasoning: `[${sleeve.strategy}] ${r.reason}`,
       meta: {
         rangeHigh: Math.max(...closed.slice(-25, -1).map((c) => c.high)),
         rangeLow: Math.min(...closed.slice(-25, -1).map((c) => c.low)),
@@ -435,8 +477,17 @@ export class TradingBot {
         spreadPips: quote.spread,
         slDistance: Math.abs(r.entryPrice - r.stopLoss),
       },
-      components: { ...base.components, priceAction: { ...base.components.priceAction, pattern: config.strategy, direction: dir, description: r.reason } },
+      components: { ...base.components, priceAction: { ...base.components.priceAction, pattern: sleeve.strategy, direction: dir, description: r.reason } },
     };
+  }
+
+  /** Closed broker D1 candles + index of yesterday relative to the signal candle's server day */
+  private async dailyContext(pair: string, entryCandle: CandleData): Promise<{ candles: CandleData[]; idx: number } | undefined> {
+    const days = (await marketClient.getCandles(pair, 'D1', 70)).filter((d) => d.closed !== false);
+    const today = entryCandle.timestamp.toISOString().slice(0, 10);
+    let idx = days.length - 1;
+    while (idx >= 0 && days[idx].timestamp.toISOString().slice(0, 10) >= today) idx--;
+    return idx >= 0 ? { candles: days, idx } : undefined;
   }
 
   private async previousDayRange(pair: string): Promise<{ high: number; low: number } | undefined> {
@@ -451,19 +502,23 @@ export class TradingBot {
    * - rejected: Groq says SKIP / opposite side / low confidence
    * - unavailable: every key failed → trade skipped (fail-closed) unless AI_REVIEW_FAIL_MODE=open
    */
-  private async reviewWithAI(signal: TradeSignal, atrPips: number): Promise<AiVerdict> {
-    if (!config.aiReviewEnabled) return 'approved';
+  private async reviewWithAI(
+    signal: TradeSignal,
+    atrPips: number,
+    sleeve: Sleeve
+  ): Promise<{ verdict: AiVerdict; decision?: string; confidence?: number; reasoning?: string }> {
+    if (!config.aiReviewEnabled) return { verdict: 'approved', reasoning: 'AI review disabled' };
 
     const prompt = [
-      `Instrument: ${signal.pair} (gold, 1 pip = 0.1), ${config.entryTimeframe} candles`,
-      `Strategy: ${config.strategy} — ${signal.reasoning}`,
+      `Instrument: ${signal.pair} (gold, 1 pip = 0.1), ${sleeve.timeframe} candles`,
+      `Strategy: ${sleeve.strategy} — ${signal.reasoning}`,
       `Proposed side: ${signal.signal}`,
       `Entry: ${signal.entryPrice}`,
       `Stop loss: ${signal.stopLoss}`,
       `Take profit: ${signal.takeProfit}`,
       `Risk/reward: 1:${signal.riskRewardRatio}`,
       `Broken range (${config.rangeMode === 'prevDay' ? 'previous day' : `last ${config.rangeHours}h`}): ${signal.meta?.rangeLow} – ${signal.meta?.rangeHigh}`,
-      `ATR(14, ${config.entryTimeframe}): ${atrPips.toFixed(1)} pips | spread ${signal.meta?.spreadPips} pips`,
+      `ATR(14, ${sleeve.timeframe}): ${atrPips.toFixed(1)} pips | spread ${signal.meta?.spreadPips} pips`,
       `Breakout strength: ${signal.components.breakout.strength}/100`,
       `Price action: ${signal.components.priceAction.pattern} (${signal.components.priceAction.direction})`,
       `Nearest support: ${signal.components.supportResistance.support?.level ?? 'none'}`,
@@ -476,17 +531,18 @@ export class TradingBot {
       const review = await groqClient.analyzeTradeOpportunity(prompt);
       notifier.reset('groq-down');
       logger.info(`🧠 AI review: ${review.decision} (${review.confidence}) — ${review.reasoning}`);
-      if (review.decision === 'SKIP' || review.decision !== signal.signal) return 'rejected';
-      return review.confidence >= config.aiMinConfidence ? 'approved' : 'rejected';
+      const info = { decision: review.decision, confidence: review.confidence, reasoning: review.reasoning };
+      if (review.decision === 'SKIP' || review.decision !== signal.signal) return { verdict: 'rejected', ...info };
+      return { verdict: review.confidence >= config.aiMinConfidence ? 'approved' : 'rejected', ...info };
     } catch (error) {
       const message = error instanceof GroqUnavailableError ? error.message : `Groq review failed: ${(error as Error).message}`;
       if (config.aiFailOpen) {
         logger.warn(`${message} — AI_REVIEW_FAIL_MODE=open, continuing with strategy signal`);
-        return 'approved';
+        return { verdict: 'approved', reasoning: 'Groq unavailable, fail-open' };
       }
       logger.error(`${message} — trade skipped (fail-closed)`);
       void notifier.notify('error', `Groq unavailable — ${signal.signal} ${signal.pair} signal skipped.\n${message}`, 'groq-down', 30 * 60 * 1000);
-      return 'unavailable';
+      return { verdict: 'unavailable', reasoning: message };
     }
   }
 

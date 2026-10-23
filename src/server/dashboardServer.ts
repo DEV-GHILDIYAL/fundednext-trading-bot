@@ -4,7 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { config } from '../config';
 import { logger, getRecentLogs } from '../utils/logger';
-import { getZonedTime, formatClock, isWithinTradingSession, formatMinutes, sessionInDisplayZone } from '../utils/time';
+import { getZonedTime, formatClock, isAnySleeveInSession, formatMinutes, sessionInDisplayZone } from '../utils/time';
 import { groqClient } from '../api/groq';
 import { notifier } from '../services/notifier';
 import { bot } from '../bot/bot';
@@ -39,7 +39,8 @@ export function buildStatus(): Record<string, unknown> {
       ...bot.getSnapshot(),
     },
     session: {
-      open: isWithinTradingSession(),
+      open: isAnySleeveInSession(),
+      strategies: config.sleeves.map((sl) => `${sl.id} 1:${sl.rewardRatio} ${formatMinutes(sl.sessionStart)}–${formatMinutes(sl.sessionEnd)} London`),
       opens: sessionInDisplayZone()?.opens ?? formatMinutes(config.sessionStart),
       closes: sessionInDisplayZone()?.closes ?? formatMinutes(config.sessionEnd),
       london: `${formatMinutes(config.sessionStart)}–${formatMinutes(config.sessionEnd)} London`,

@@ -32,8 +32,63 @@ const STRATEGIES = [
   'casperSmc',
   'supertrend',
   'emaRangeBreakout',
+  'nyOpenBreakout',
+  'insideDayBreakout',
 ] as const;
 export type StrategyKey = (typeof STRATEGIES)[number];
+
+/** One strategy of the portfolio: strategy × entry timeframe × reward ratio × session (London time) */
+export interface Sleeve {
+  id: string;
+  strategy: StrategyKey;
+  timeframe: EntryTimeframe;
+  rewardRatio: number;
+  /** Minutes since midnight, London time */
+  sessionStart: number;
+  sessionEnd: number;
+}
+
+/** Sessions each strategy was validated with (London time) — used when STRATEGIES omits one */
+export const DEFAULT_SLEEVE_SESSION: Partial<Record<StrategyKey, [string, string]>> = {
+  asianBreakout: ['08:00', '11:30'],
+  volBreakout: ['01:00', '21:00'],
+  // these two have their own time rules (NY 09:30–12:00 / any time of the broker day)
+  nyOpenBreakout: ['00:00', '24:00'],
+  insideDayBreakout: ['00:00', '24:00'],
+};
+
+/**
+ * STRATEGIES="asianBreakout:M30:2, volBreakout:M30:2, nyOpenBreakout:M15:2, insideDayBreakout:H1:2"
+ * optional session per item: "asianBreakout:M30:2:08:00-11:30". Empty → one sleeve from STRATEGY/ENTRY_TIMEFRAME/PROFIT_RATIO/SESSION_*.
+ */
+export function parseSleeves(value: string | undefined, fallback: Omit<Sleeve, 'id'>): Sleeve[] {
+  const items = (value || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const out: Sleeve[] = [];
+  for (const item of items) {
+    const m = /^(\w+):(M5|M15|M30|H1|H4|D1):([\d.]+)(?::(\d{1,2}:\d{2})-(\d{1,2}:\d{2}))?$/i.exec(item);
+    if (!m || !(STRATEGIES as readonly string[]).includes(m[1])) {
+      // eslint-disable-next-line no-console
+      console.warn(`STRATEGIES: ignoring invalid item "${item}" (expected name:TF:RR[:HH:MM-HH:MM])`);
+      continue;
+    }
+    const strategy = m[1] as StrategyKey;
+    const def = DEFAULT_SLEEVE_SESSION[strategy] ?? ['08:00', '11:30'];
+    const sleeve: Sleeve = {
+      id: `${strategy}:${m[2].toUpperCase()}`,
+      strategy,
+      timeframe: m[2].toUpperCase() as EntryTimeframe,
+      rewardRatio: Math.min(Math.max(Number(m[3]) || 2, 1), 5),
+      sessionStart: parseClock(m[4], def[0]),
+      sessionEnd: parseClock(m[5], def[1]),
+    };
+    if (!out.some((o) => o.id === sleeve.id)) out.push(sleeve);
+  }
+  if (out.length > 0) return out;
+  return [{ ...fallback, id: `${fallback.strategy}:${fallback.timeframe}` }];
+}
 
 function parseStrategy(value: string | undefined): StrategyKey {
   const v = (value || 'breakout').trim();
@@ -64,6 +119,13 @@ const minTradingDaysPerPhase = Math.max(1, num(process.env.MIN_TRADING_DAYS_PER_
 const phaseStartDate = (process.env.PHASE_START_DATE || '').trim();
 const safetyBuffer = parseFloat((riskPerTrade * maxTradesPerDay).toFixed(2));
 const minTradeDurationSeconds = Math.max(30, num(process.env.MIN_TRADE_DURATION_SECONDS, 30));
+
+const strategy = parseStrategy(process.env.STRATEGY);
+const entryTimeframe = parseTimeframe(process.env.ENTRY_TIMEFRAME);
+const profitRatio = Math.min(Math.max(num(process.env.PROFIT_RATIO, 2), 1), 5);
+const sessionStart = parseClock(process.env.SESSION_START, '08:00');
+const sessionEnd = parseClock(process.env.SESSION_END, '11:30');
+const sleeves = parseSleeves(process.env.STRATEGIES, { strategy, timeframe: entryTimeframe, rewardRatio: profitRatio, sessionStart, sessionEnd });
 
 export const config = {
   // Environment
@@ -135,14 +197,18 @@ export const config = {
   // Trading session — defined in London time so UK daylight saving is handled automatically.
   // 08:00–11:30 London = 13:30–17:00 IST in winter (12:30–16:00 IST in summer).
   sessionTimezone: process.env.SESSION_TIMEZONE || 'Europe/London',
-  sessionStart: parseClock(process.env.SESSION_START, '08:00'),
-  sessionEnd: parseClock(process.env.SESSION_END, '11:30'),
+  sessionStart,
+  sessionEnd,
 
   // Strategy
   // Which strategy from src/strategies/library.ts the bot trades
-  strategy: parseStrategy(process.env.STRATEGY),
+  strategy,
   // Candle timeframe for entries: M5 | M15 | M30 | H1 (default) | H4 | D1
-  entryTimeframe: parseTimeframe(process.env.ENTRY_TIMEFRAME),
+  entryTimeframe,
+  // Portfolio of strategies traded together (STRATEGIES); one position at a time, MAX_TRADES_PER_DAY shared
+  sleeves,
+  // No new entries 15 min before → 30 min after US tier-1 news (FOMC: 60 min after)
+  newsFilter: process.env.NEWS_FILTER !== 'false',
   // Breakout range length in hours (rolling mode)
   rangeHours: Math.max(1, num(process.env.RANGE_HOURS, 24)),
   // Require the price-action filter to agree with the breakout
@@ -153,7 +219,7 @@ export const config = {
   slMaxAtr: num(process.env.SL_MAX_ATR, 1.5),
   maxSpreadPips: num(process.env.MAX_SPREAD_PIPS, 8),
   // Reward:risk (TP = ratio × SL distance)
-  profitRatio: Math.min(Math.max(num(process.env.PROFIT_RATIO, 2), 1), 5),
+  profitRatio,
 
   // Dashboard (web UI + JSON API)
   dashboardEnabled: process.env.DASHBOARD_ENABLED !== 'false',

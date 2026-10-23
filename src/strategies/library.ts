@@ -21,12 +21,20 @@
  *   emaRangeBreakout XAUUSD EMA Breakout EA: higher-TF close vs EMA200 trend, entry-TF close beyond the
  *                  previous 10 candles' range, SL = other side of range ± 0.5 ATR, TP = R × SL; server hours 8–12, 14–19
  *
+ * Research-plan additions (Oct 2026):
+ *   nyOpenBreakout  NY/COMEX-open range (08:30–09:30 New York), first close beyond it ± 5% of the range,
+ *                  09:30–12:00 NY, range 0.15–1.0 × D1 ATR, SL = other side (cap 0.6 × D1 ATR), no FOMC days
+ *   insideDayBreakout yesterday inside day or NR4 and range < ATR40(D1); close beyond yesterday's high/low
+ *                  ± 0.1 × D1 ATR in the SMA5 direction; SL 1 × D1 ATR
+ *   Filters: news blackout (US tier-1) on every strategy; asianBreakout range 0.10–0.80 × D1 ATR
+ *
  * Every strategy: stop distance clamped to [slMinAtr, slMaxAtr] × ATR, TP = rewardRatio × stop.
  */
 import { CandleData, PriceData, computeAtrPips } from '../api/market';
 import { getPairSpec } from '../constants/pairs';
 import { getZonedTime } from '../utils/time';
 import { Indicators } from './indicators';
+import { isFomcDay } from './news';
 import { EntrySignalGenerator, StrategyParams, minClosedCandles } from './entrySignalGenerator';
 
 export const STRATEGY_NAMES = [
@@ -45,6 +53,8 @@ export const STRATEGY_NAMES = [
   'casperSmc',
   'supertrend',
   'emaRangeBreakout',
+  'nyOpenBreakout',
+  'insideDayBreakout',
 ] as const;
 export type StrategyName = (typeof STRATEGY_NAMES)[number];
 
@@ -76,6 +86,32 @@ export interface LibContext {
    * emaRangeBreakout → sign of (last closed HTF close − HTF EMA200)
    */
   htfDir?: number;
+  /** Closed broker D1 candles; `idx` = yesterday (last D1 before the signal candle's server day) */
+  daily?: { candles: CandleData[]; idx: number };
+  /** Set when the signal time is inside a news blackout window (no new entries) */
+  newsBlock?: string | null;
+  /** Research-plan filters (range vs D1 ATR); default true */
+  useFilters?: boolean;
+}
+
+/** Filter settings from the research plan */
+export const FILTERS = {
+  asianRangeMinD1Atr: 0.1,
+  asianRangeMaxD1Atr: 0.8,
+  nyRangeMinD1Atr: 0.15,
+  nyRangeMaxD1Atr: 1.0,
+  nyStopCapD1Atr: 0.6,
+};
+
+/** ATR (simple mean true range) of the broker D1 candles ending at `idx` */
+export function dailyAtr(daily: { candles: CandleData[]; idx: number } | undefined, n: number = 14): number {
+  if (!daily || daily.idx < n) return NaN;
+  const d = daily.candles;
+  let sum = 0;
+  for (let k = daily.idx - n + 1; k <= daily.idx; k++) {
+    sum += Math.max(d[k].high - d[k].low, Math.abs(d[k].high - d[k - 1].close), Math.abs(d[k].low - d[k - 1].close));
+  }
+  return sum / n;
 }
 
 export interface LibSignal {
@@ -199,6 +235,12 @@ function asianBreakout(ctx: LibContext): LibResult {
   const needBars = Math.max(2, Math.floor((5 * 60) / ctx.tfMinutes));
   if (bars < needBars) return skip('No complete Asian range today');
 
+  if (ctx.useFilters !== false) {
+    const d1 = dailyAtr(ctx.daily);
+    const size = high - low;
+    if (Number.isFinite(d1) && size < FILTERS.asianRangeMinD1Atr * d1) return skip(`Asian range ${size.toFixed(1)} < ${FILTERS.asianRangeMinD1Atr}× D1 ATR`);
+    if (Number.isFinite(d1) && size > FILTERS.asianRangeMaxD1Atr * d1) return skip(`Asian range ${size.toFixed(1)} > ${FILTERS.asianRangeMaxD1Atr}× D1 ATR`);
+  }
   const mid = (high + low) / 2;
   if (c[i].close > high && c[i - 1].close <= high) return build(ctx, 'BUY', mid, `Close above Asian high ${high}`);
   if (c[i].close < low && c[i - 1].close >= low) return build(ctx, 'SELL', mid, `Close below Asian low ${low}`);
@@ -562,6 +604,94 @@ function emaRangeBreakout(ctx: LibContext): LibResult {
   };
 }
 
+/** Order with an explicit stop distance (no entry-TF ATR clamp — the strategy sizes it from D1 ATR) */
+function buildDist(ctx: LibContext, side: 'BUY' | 'SELL', dist: number, reason: string): LibResult {
+  if (!(dist > 0)) return skip('Invalid stop distance');
+  const entry = side === 'BUY' ? ctx.quote.ask : ctx.quote.bid;
+  const sl = side === 'BUY' ? entry - dist : entry + dist;
+  const tp = side === 'BUY' ? entry + dist * ctx.rewardRatio : entry - dist * ctx.rewardRatio;
+  return { side, entryPrice: round(ctx.pair, entry), stopLoss: round(ctx.pair, sl), takeProfit: round(ctx.pair, tp), reason, exit: 'fixed' };
+}
+
+/** NY/COMEX-open range breakout (spec A of the research plan) */
+function nyOpenBreakout(ctx: LibContext): LibResult {
+  const { candles: c, i } = ctx;
+  const tfMs = ctx.tfMinutes * 60000;
+  const ny = (d: Date) => getZonedTime(ctx.toUtc(d), 'America/New_York');
+  const closeT = getZonedTime(new Date(ctx.toUtc(c[i].timestamp).getTime() + tfMs), 'America/New_York');
+  if (closeT.minutesOfDay <= 9 * 60 + 30 || closeT.minutesOfDay > 12 * 60) return skip('Outside NY 09:30–12:00');
+  if (isFomcDay(closeT.dateKey)) return skip('FOMC day');
+
+  let high = -Infinity;
+  let low = Infinity;
+  let bars = 0;
+  let firstAfter = -1;
+  for (let j = i; j >= 0 && j > i - 60; j--) {
+    const t = ny(c[j].timestamp);
+    if (t.dateKey !== closeT.dateKey) break;
+    if (t.minutesOfDay >= 8 * 60 + 30 && t.minutesOfDay < 9 * 60 + 30) {
+      high = Math.max(high, c[j].high);
+      low = Math.min(low, c[j].low);
+      bars++;
+    } else if (t.minutesOfDay >= 9 * 60 + 30) firstAfter = j;
+  }
+  if (bars < Math.max(1, Math.floor(60 / ctx.tfMinutes))) return skip('No complete 08:30–09:30 NY range');
+  const size = high - low;
+  const d1 = dailyAtr(ctx.daily);
+  if (ctx.useFilters !== false && Number.isFinite(d1)) {
+    if (size < FILTERS.nyRangeMinD1Atr * d1) return skip(`NY range ${size.toFixed(1)} < ${FILTERS.nyRangeMinD1Atr}× D1 ATR`);
+    if (size > FILTERS.nyRangeMaxD1Atr * d1) return skip(`NY range ${size.toFixed(1)} > ${FILTERS.nyRangeMaxD1Atr}× D1 ATR`);
+  }
+  const up = high + 0.05 * size;
+  const down = low - 0.05 * size;
+  for (let j = firstAfter; j >= 0 && j < i; j++) {
+    if (c[j].close > up || c[j].close < down) return skip('NY breakout already triggered today');
+  }
+  const cap = Number.isFinite(d1) ? FILTERS.nyStopCapD1Atr * d1 : Infinity;
+  if (c[i].close > up) {
+    const dist = Math.min(ctx.quote.ask - low, cap);
+    return buildDist(ctx, 'BUY', dist, `Close above NY opening range ${low.toFixed(2)}–${high.toFixed(2)}`);
+  }
+  if (c[i].close < down) {
+    const dist = Math.min(high - ctx.quote.bid, cap);
+    return buildDist(ctx, 'SELL', dist, `Close below NY opening range ${low.toFixed(2)}–${high.toFixed(2)}`);
+  }
+  return skip('No NY opening-range breakout');
+}
+
+/** Daily volatility-contraction breakout: inside day / NR4 (spec B of the research plan) */
+function insideDayBreakout(ctx: LibContext): LibResult {
+  const { candles: c, i } = ctx;
+  const daily = ctx.daily;
+  if (!daily || daily.idx < 41) return skip('Not enough D1 history');
+  const d = daily.candles;
+  const k = daily.idx;
+  const y = d[k];
+  const rng = (b: CandleData) => b.high - b.low;
+  const inside = y.high < d[k - 1].high && y.low > d[k - 1].low;
+  const nr4 = rng(y) < Math.min(rng(d[k - 1]), rng(d[k - 2]), rng(d[k - 3]));
+  if (!inside && !nr4) return skip('Yesterday not an inside day / NR4');
+  const atr40 = dailyAtr(daily, 40);
+  const atr14 = dailyAtr(daily, 14);
+  if (!(rng(y) < atr40)) return skip('Yesterday range not below ATR40');
+  let sma5 = 0;
+  for (let j = k - 4; j <= k; j++) sma5 += d[j].close / 5;
+  const long = y.close > sma5;
+  const short = y.close < sma5;
+  const up = y.high + 0.1 * atr14;
+  const down = y.low - 0.1 * atr14;
+
+  const today = serverDay(c[i].timestamp);
+  if (serverDay(y.timestamp) >= today) return skip('D1 data not aligned');
+  for (let j = i - 1; j >= 0 && serverDay(c[j].timestamp) === today; j--) {
+    if ((long && c[j].close > up) || (short && c[j].close < down)) return skip('Already triggered today');
+  }
+  const tag = inside ? 'inside day' : 'NR4';
+  if (long && c[i].close > up) return buildDist(ctx, 'BUY', atr14, `Yesterday ${tag}, close above ${y.high} + 0.1 ATR, above SMA5`);
+  if (short && c[i].close < down) return buildDist(ctx, 'SELL', atr14, `Yesterday ${tag}, close below ${y.low} − 0.1 ATR, below SMA5`);
+  return skip(`Yesterday ${tag} — waiting for breakout`);
+}
+
 const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   breakout,
   trendPullback,
@@ -578,9 +708,12 @@ const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   casperSmc,
   supertrend: supertrendEa,
   emaRangeBreakout,
+  nyOpenBreakout,
+  insideDayBreakout,
 };
 
 export function evaluateStrategy(name: StrategyName, ctx: LibContext): LibResult {
+  if (ctx.newsBlock) return skip(ctx.newsBlock);
   if (name === 'supertrend' || name === 'emaRangeBreakout') {
     // EA has its own filters (ADX, flips, distance); only the spread check is shared
     if (ctx.quote.spread > ctx.maxSpreadPips) return skip(`Spread ${ctx.quote.spread} > max ${ctx.maxSpreadPips} pips`);

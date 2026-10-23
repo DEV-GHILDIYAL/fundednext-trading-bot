@@ -3,7 +3,7 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { riskManager } from '../services/riskManager';
 import { tradeMonitor } from '../services/tradeMonitor';
-import { isWithinTradingSession } from '../utils/time';
+import { isAnySleeveInSession as isWithinTradingSession } from '../utils/time';
 
 export class BotScheduler {
   private tasks: Map<string, cron.ScheduledTask> = new Map();
