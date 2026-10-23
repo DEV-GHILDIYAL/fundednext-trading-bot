@@ -383,7 +383,8 @@ export class TradingBot {
       rewardRatio: config.profitRatio,
       slMinAtr: config.slMinAtr,
       slMaxAtr: config.slMaxAtr,
-      minAtrPips: config.minAtrPips,
+      // MIN_ATR_PIPS is the H1 value; scale by √time like the backtest (M30 ≈ 0.71×, M15 = 0.5×)
+      minAtrPips: config.minAtrPips * Math.sqrt(TIMEFRAME_MINUTES[config.entryTimeframe] / 60),
       maxSpreadPips: config.maxSpreadPips,
       breakout: params,
       toUtc: (d) => new Date(d.getTime() - offset),
