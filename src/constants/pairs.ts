@@ -54,8 +54,8 @@ export const PAIR_SPECS: Record<KnownPair, PairSpec> = {
     pipSize: 0.1,
     digits: 2,
     contractSize: 100,
-    mockBasePrice: 2650,
-    mockHourlyRange: 6,
+    mockBasePrice: 4000,
+    mockHourlyRange: 15,
     mockSpread: 0.3,
   },
 };

@@ -3,8 +3,7 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { riskManager } from '../services/riskManager';
 import { tradeMonitor } from '../services/tradeMonitor';
-import { bot } from './bot';
-import { isWithinTradingSession } from '../utils/time';
+import { isAnySleeveInSession as isWithinTradingSession } from '../utils/time';
 
 export class BotScheduler {
   private tasks: Map<string, cron.ScheduledTask> = new Map();
@@ -17,17 +16,6 @@ export class BotScheduler {
     // Daily reset at midnight (bot timezone)
     this.add('dailyReset', '0 0 * * *', opts, () => {
       riskManager.resetDaily();
-    });
-
-    // Session open notice (Mon–Fri)
-    this.add('marketOpen', `${config.londonOpenMinute} ${config.londonOpenHour} * * 1-5`, opts, () => {
-      logger.info('🔔 London session open');
-    });
-
-    // Session close: force-close everything (Mon–Fri)
-    this.add('marketClose', `${config.londonCloseMinute} ${config.londonCloseHour} * * 1-5`, opts, () => {
-      logger.info('🔔 London session close — closing all positions');
-      bot.closeAllPositions('Session close').catch((error) => logger.error('Session close failed', error));
     });
 
     // Hourly report during the session

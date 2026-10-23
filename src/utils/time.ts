@@ -42,15 +42,69 @@ export function getZonedTime(date: Date = new Date(), timeZone: string = config.
   };
 }
 
-export function isWithinTradingSession(date: Date = new Date()): boolean {
-  const t = getZonedTime(date);
+/**
+ * Inside the London trading window (Mon–Fri)? The window is defined in
+ * SESSION_TIMEZONE (Europe/London) so UK daylight-saving changes are automatic.
+ */
+export function isWithinTradingSession(
+  date: Date = new Date(),
+  start: number = config.sessionStart,
+  end: number = config.sessionEnd,
+  timeZone: string = config.sessionTimezone
+): boolean {
+  const t = getZonedTime(date, timeZone);
   if (t.weekday === 0 || t.weekday === 6) return false;
+  return t.minutesOfDay >= start && t.minutesOfDay < end;
+}
 
-  const open = config.londonOpenHour * 60 + config.londonOpenMinute;
-  const close = config.londonCloseHour * 60 + config.londonCloseMinute;
-  return t.minutesOfDay >= open && t.minutesOfDay < close;
+/** Weekend (Sat/Sun in the session timezone) — gold market closed */
+export function isWeekend(date: Date = new Date(), timeZone: string = config.sessionTimezone): boolean {
+  const day = getZonedTime(date, timeZone).weekday;
+  return day === 0 || day === 6;
+}
+
+export function formatMinutes(minutes: number): string {
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Today's session window expressed in the display timezone (e.g. 13:30–17:00 IST).
+ * Scans today's minutes in 5-minute steps — DST-safe without a tz library.
+ */
+export function sessionInDisplayZone(now: Date = new Date()): { opens: string; closes: string } | null {
+  const local = getZonedTime(now);
+  const dayStart = now.getTime() - (now.getTime() % 60000) - local.minutesOfDay * 60000;
+  let opens: string | null = null;
+  let closes: string | null = null;
+  for (let m = 0; m <= 24 * 60; m += 5) {
+    const d = new Date(dayStart + m * 60000);
+    const lm = getZonedTime(d, config.sessionTimezone).minutesOfDay;
+    const inside = lm >= config.sessionStart && lm < config.sessionEnd;
+    if (inside && opens === null) opens = formatClock(getZonedTime(d));
+    if (!inside && opens !== null) {
+      closes = formatClock(getZonedTime(d));
+      break;
+    }
+  }
+  return opens && closes ? { opens, closes } : null;
 }
 
 export function formatClock(t: ZonedTime): string {
   return `${String(t.hour).padStart(2, '0')}:${String(t.minute).padStart(2, '0')}`;
+}
+
+/** Inside the session of at least one portfolio strategy (STRATEGIES) */
+export function isAnySleeveInSession(date: Date = new Date()): boolean {
+  return config.sleeves.some((s) => isWithinTradingSession(date, s.sessionStart, s.sessionEnd));
+}
+
+/** A session-timezone (London) clock time expressed in the display timezone today, e.g. 08:00 London → "13:30" IST */
+export function sessionClockInDisplayZone(minutes: number, now: Date = new Date()): string {
+  const target = minutes % (24 * 60);
+  const base = Math.floor(now.getTime() / 300000) * 300000; // 5-minute aligned so the scan hits HH:M0/M5
+  for (let m = -12 * 60; m <= 36 * 60; m += 5) {
+    const d = new Date(base + m * 60000);
+    if (getZonedTime(d, config.sessionTimezone).minutesOfDay === target) return formatClock(getZonedTime(d));
+  }
+  return formatMinutes(minutes);
 }

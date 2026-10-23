@@ -1,209 +1,138 @@
-# Phase 6: Deployment Guide
+# Deployment
 
-## Quick Start (Local Testing)
+Two machines in **ap-south-1 (Mumbai)**, same default VPC:
 
-```bash
-# Build Docker image
-docker build -t fundednext-bot .
+| Machine | Runs | Managed by |
+|---|---|---|
+| `fundednext-bot-prod` (Ubuntu, existing) | Node bot + dashboard (PM2) | GitHub Actions `deploy-bot.yml` (SSH) |
+| `fundednext-bot-mt5` (Windows Server 2022) | MT5 terminal + `bridge/` | Terraform + `deploy-bridge.yml` (SSM) |
 
-# Run with Docker Compose
-docker-compose up
-
-# View logs
-docker logs -f fundednext-bot
-```
-
-## AWS EC2 Deployment
-
-### Step 1: Prerequisites
-```bash
-# Install AWS CLI
-pip install awscli
-
-# Configure AWS credentials
-aws configure
-# Enter: Access Key ID, Secret Access Key, Region (ap-south-1), Format (json)
-
-# Create EC2 key pair
-aws ec2 create-key-pair --key-name fundednext-bot --query 'KeyMaterial' --output text > ~/.ssh/fundednext-bot.pem
-chmod 600 ~/.ssh/fundednext-bot.pem
-```
-
-### Step 2: Run Deployment Script
-```bash
-# From project directory
-./scripts/deploy.sh
-
-# This will:
-# - Create security group
-# - Launch t3.micro instance (free tier eligible)
-# - Return instance IP
-```
-
-### Step 3: Connect & Setup
-```bash
-# SSH into instance
-ssh -i ~/.ssh/fundednext-bot.pem ubuntu@YOUR_EC2_IP
-
-# Clone repo
-git clone https://github.com/DEV-GHILDIYAL/fundednext-trading-bot.git
-cd fundednext-trading-bot
-
-# Setup environment
-cp .env.example .env
-nano .env
-# Add your API keys:
-# - FUNDEDNEXT_API_KEY
-# - CLAUDE_API_KEY
-# - MARKET_DATA_API_KEY
-# - BOT_ENABLED=true (when ready)
-```
-
-### Step 4: Deploy with PM2
-```bash
-# Install dependencies
-npm install
-
-# Build TypeScript
-npm run build
-
-# Start with PM2
-pm2 start ecosystem.config.js
-
-# Save PM2 config (auto-restart on reboot)
-pm2 save
-
-# Setup PM2 to restart on system reboot
-pm2 startup
-# Run the command it suggests
-
-# View logs
-pm2 logs fundednext-bot
-
-# Monitor
-pm2 monit
-```
-
-## Monitoring
-
-### Via SSH
-```bash
-# View real-time logs
-pm2 logs fundednext-bot
-
-# View all processes
-pm2 list
-
-# View detailed status
-pm2 info fundednext-bot
-
-# Restart bot
-pm2 restart fundednext-bot
-
-# Stop bot
-pm2 stop fundednext-bot
-```
-
-### Via CloudWatch
-```bash
-# View EC2 metrics
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/EC2 \
-  --metric-name CPUUtilization \
-  --dimensions Name=InstanceId,Value=i-XXXXX \
-  --statistics Average \
-  --start-time 2026-10-20T00:00:00Z \
-  --end-time 2026-10-22T23:59:59Z \
-  --period 300
-```
-
-## CI/CD with GitHub Actions
-
-### Setup
-1. Create GitHub secrets:
-   ```
-   EC2_DEPLOY_KEY: (content of ~/.ssh/fundednext-bot.pem)
-   EC2_HOST: your-ec2-instance-ip
-   ```
-
-2. Secrets added in: Settings → Secrets and variables → Actions
-
-3. On next push to main, deployment auto-runs
-
-### Trigger Manual Deploy
-```bash
-# In GitHub: Actions tab → Deploy to AWS → Run workflow
-```
-
-## Cost Optimization (AWS)
-
-- **t3.micro**: 750 hours free/month (free tier)
-- **EBS**: 30GB free/month
-- **Data transfer**: Free within AWS region
-- **Cost per month**: ~₹100-200 if running 24/7
-
-## Scaling for Production
-
-When ready for real trading:
-
-```bash
-# On EC2 instance
-nano .env
-
-# Change:
-BOT_ENABLED=true
-DRY_RUN=false
-NODE_ENV=production
-
-# Restart
-pm2 restart fundednext-bot
-
-# Verify logs
-pm2 logs fundednext-bot --lines 50
-```
-
-## Troubleshooting
-
-### Bot not starting
-```bash
-pm2 logs fundednext-bot  # Check error logs
-npm run build             # Rebuild TypeScript
-pm2 restart fundednext-bot
-```
-
-### Out of memory
-```bash
-# Increase memory limit in ecosystem.config.js
-# Or upgrade to t3.small instance
-```
-
-### SSH connection issues
-```bash
-# Check security group
-aws ec2 describe-security-groups --group-names fundednext-bot-sg
-
-# Add SSH rule if needed
-aws ec2 authorize-security-group-ingress \
-  --group-name fundednext-bot-sg \
-  --protocol tcp \
-  --port 22 \
-  --cidr YOUR_IP/32
-```
-
-## Backup & Recovery
-
-```bash
-# Backup database
-scp -i ~/.ssh/fundednext-bot.pem \
-  ubuntu@YOUR_EC2_IP:/home/ubuntu/fundednext-trading-bot/data/trades.db \
-  ./backups/trades_$(date +%Y%m%d).db
-
-# Backup logs
-scp -i ~/.ssh/fundednext-bot.pem \
-  -r ubuntu@YOUR_EC2_IP:/home/ubuntu/fundednext-trading-bot/logs \
-  ./backups/logs_$(date +%Y%m%d)
-```
+> Free tier: two instances share the 750 free hours/month, so running both 24/7 costs roughly one
+> t3.micro beyond the free hours (or is covered by the new-account credits). Windows needs a 30 GB
+> disk; Ubuntu 8 GB → 38 GB total vs 30 GB free (≈ $1/month).
 
 ---
 
-**Next: Phase 7 - Backtesting & Testing**
+## 1. Windows MT5 host (Terraform)
+
+Prereqs on your laptop: [Terraform ≥ 1.5](https://developer.hashicorp.com/terraform/install), AWS CLI logged in (`aws configure`).
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars   # MT5 login/password, your IP, bot private IP
+terraform init
+terraform apply
+```
+
+Outputs you need:
+
+| Output | Use |
+|---|---|
+| `bridge_url` | bot `.env` → `MT5_BRIDGE_URL` |
+| `read_secrets` | commands to print the bridge token + Windows password |
+| `mt5_host_instance_id` | GitHub secret `WINDOWS_INSTANCE_ID` |
+| `github_deploy_role_arn` | GitHub secret `AWS_DEPLOY_ROLE_ARN` |
+
+First boot takes ~15 min (Git, Python, MT5, bridge, auto-logon, reboot). Log: `C:\fundednext-bootstrap.log`.
+
+### One-time manual step (RDP, ~3 min)
+
+The generic MT5 installer may not know FundedNext's server yet, and **Algo Trading** must be switched on once:
+
+1. RDP to `mt5_host_public_ip`, user `Administrator`, password from `read_secrets`.
+2. In MT5: **File → Open an Account** → search **FundedNext** → select **FundedNext-Server3** → *Connect with an existing account* → login.
+3. Click **Algo Trading** in the toolbar (green). **Tools → Options → Expert Advisors**: tick *Allow algorithmic trading*.
+4. Close RDP **with "Disconnect"** (not Sign out) — the session must stay logged on.
+
+Check from the Ubuntu box:
+
+```bash
+curl http://<mt5-private-ip>:8765/health          # {"ok":true,"tradeAllowed":true,...}
+```
+
+> The bridge only accepts traffic from `bot_private_ip` (security group) and requires the bearer token.
+
+---
+
+## 2. Bot on Ubuntu (`fundednext-bot-prod`)
+
+On the server, the repo must be a git clone at `/home/ubuntu/fundednext-trading-bot` with PM2 installed.
+
+```bash
+cd ~/fundednext-trading-bot
+cp .env.example .env && nano .env
+#   DATA_SOURCE=mt5
+#   MT5_BRIDGE_URL=http://<mt5-private-ip>:8765
+#   MT5_BRIDGE_TOKEN=<bridge_token from SSM>
+#   DRY_RUN=true                       ← paper trades on real prices first
+#   GROQ_API_KEY=... GROQ_API_KEY_2=...
+#   TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=...
+#   DASHBOARD_PASSWORD=<new strong password>
+npm ci && npm run build
+pm2 start ecosystem.config.js && pm2 save
+```
+
+Old env names `LONDON_OPEN_HOUR/…`, `FUNDEDNEXT_API_KEY`, `MARKET_DATA_API_KEY` are no longer used — delete them.
+
+---
+
+## 3. GitHub Actions
+
+Repo → **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Value |
+|---|---|
+| `EC2_HOST` | Ubuntu public IP / DNS (`3.7.248.184`) |
+| `EC2_USER` | `ubuntu` |
+| `EC2_SSH_KEY` | full contents of the `.pem` key |
+| `APP_DIR` | `/home/ubuntu/fundednext-trading-bot` (optional, this is the default) |
+| `WINDOWS_INSTANCE_ID` | Terraform output `mt5_host_instance_id` |
+| `AWS_DEPLOY_ROLE_ARN` | Terraform output `github_deploy_role_arn` |
+
+Optional **variable** `AWS_REGION` (default `ap-south-1`).
+
+| Workflow | Trigger | Does |
+|---|---|---|
+| `ci.yml` | PRs, non-main pushes | lint, type-check, Jest, build · bridge pytest (mock MT5) · terraform validate |
+| `deploy-bot.yml` | push to `main` (not bridge/infra/docs) | CI → SSH → `scripts/deploy-remote.sh` (pull, build, `pm2 reload`, health check) |
+| `deploy-bridge.yml` | push to `main` touching `bridge/` or `scripts/windows/` | CI → OIDC → SSM → `scripts/windows/deploy.ps1` (pull, pip, restart, health check) |
+
+Deploy jobs skip cleanly while their secrets are missing. SSH from GitHub runners needs port 22 open on the
+Ubuntu security group. Restarts don't close trades.
+
+---
+
+## 4. Testing stages
+
+1. `DATA_SOURCE=mt5`, `DRY_RUN=true` — real prices, paper trades. Watch the dashboard + Telegram for a few sessions.
+2. `npm run backtest -- --bars 5000` on the server — check trade frequency and win rate on real history.
+3. `DRY_RUN=false` on the **FundedNext demo** — real orders. Start the day watching the first trade.
+
+---
+
+## 5. Moving to a new AWS account (free tier ended)
+
+1. **Back up** the trade history from the old bot:
+   `scp -i key.pem -r ubuntu@<old-ip>:~/fundednext-trading-bot/data ./backup-data`
+2. New account: `aws configure` with the new keys.
+3. `terraform.tfvars`: set `create_bot_instance = true`, `bot_private_ip = ""` (+ `create_github_oidc_provider = true`).
+4. `rm -rf .terraform terraform.tfstate*` (old account's state) → `terraform init && terraform apply`.
+5. Ubuntu: copy `.env` + `backup-data/` to the new box (`scp`), then `pm2 start ecosystem.config.js && pm2 save`.
+   Update `MT5_BRIDGE_URL` to the new `bridge_url`.
+6. Windows: repeat the one-time RDP step.
+7. Update GitHub secrets: `EC2_HOST`, `EC2_SSH_KEY`, `WINDOWS_INSTANCE_ID`, `AWS_DEPLOY_ROLE_ARN`.
+8. Old account: `terraform destroy` (with the old state) or terminate instances manually.
+
+Everything else (bootstrap, secrets in SSM, deploy pipelines) is recreated by step 4.
+
+---
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Dashboard `DATA: MT5` + errors / Telegram "MT5 bridge error" | `curl <bridge>/health`; RDP → is the session logged on? `C:\fundednext-bot\bridge\logs\bridge.log` |
+| Orders rejected `AutoTrading disabled` | Algo Trading button in MT5 (one-time step 3) |
+| `tradeAllowed:false` in `/health` | same as above |
+| "AI review unavailable" | Groq keys / quota; Telegram shows which key failed |
+| Bridge deploy fails "did not become healthy" | Administrator session was signed out → RDP in once (auto-logon fixes it after a reboot) |

@@ -41,3 +41,17 @@ temp/
 
 # Backtest output
 backtest/results/
+
+# MT5 bridge (Python)
+bridge/.venv/
+bridge/.env
+bridge/logs/
+__pycache__/
+.pytest_cache/
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars
+infra/terraform/.terraform.lock.hcl

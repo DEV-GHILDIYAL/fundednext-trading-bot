@@ -9,6 +9,29 @@ export class Calculator {
     return parseFloat((riskAmount / stopDistance).toFixed(4));
   }
 
+  /**
+   * Lot size for a fixed $ risk, rounded DOWN to the broker's volume step so the
+   * real risk never exceeds `riskAmount`. Returns lots = 0 when even the minimum
+   * lot would risk more than allowed.
+   */
+  static calculateLots(
+    riskAmount: number,
+    entryPrice: number,
+    stopLossPrice: number,
+    spec: { contractSize: number; volumeMin: number; volumeMax: number; volumeStep: number }
+  ): { lots: number; units: number; risk: number } {
+    const stopDistance = Math.abs(entryPrice - stopLossPrice);
+    if (stopDistance <= 0 || !Number.isFinite(stopDistance) || spec.volumeStep <= 0) return { lots: 0, units: 0, risk: 0 };
+    const rawLots = riskAmount / stopDistance / spec.contractSize;
+    const steps = Math.floor(rawLots / spec.volumeStep + 1e-9);
+    const stepDecimals = Math.max(0, Math.ceil(-Math.log10(spec.volumeStep) - 1e-9));
+    let lots = parseFloat((steps * spec.volumeStep).toFixed(stepDecimals));
+    if (lots < spec.volumeMin) return { lots: 0, units: 0, risk: 0 };
+    lots = Math.min(lots, spec.volumeMax);
+    const units = lots * spec.contractSize;
+    return { lots, units: parseFloat(units.toFixed(4)), risk: parseFloat((units * stopDistance).toFixed(2)) };
+  }
+
   /** Convert units to lots for a given contract size (100000 for FX, 100 for gold) */
   static unitsToLots(units: number, contractSize: number): number {
     return parseFloat((units / contractSize).toFixed(2));
