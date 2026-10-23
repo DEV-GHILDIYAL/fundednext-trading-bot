@@ -25,6 +25,8 @@ export interface OpenTrade {
   lots?: number;
   /** $ at risk if the stop is hit */
   riskAmount?: number;
+  /** Portfolio strategy that opened it (e.g. asianBreakout:M30) */
+  sleeve?: string;
 }
 
 export type ExitReason = 'STOP_LOSS' | 'TAKE_PROFIT';

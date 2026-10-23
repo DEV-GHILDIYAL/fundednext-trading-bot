@@ -35,10 +35,10 @@ Compare them on real MT5 history: `npm run backtest -- --strategies` (ranked, wi
 
 ### Portfolio mode (recommended)
 
-`STRATEGIES=` trades several strategies together. Only one position is open at a time, `MAX_TRADES_PER_DAY` is shared, and the first signal wins:
+`STRATEGIES=` trades several strategies together. By default only one position is open at a time; `MAX_OPEN_POSITIONS=2|3` allows more, same direction only and one per strategy. `MAX_TRADES_PER_DAY` is shared, and the first signal wins:
 
 ```
-STRATEGIES=asianBreakout:M30:2, volBreakout:M30:2, nyOpenBreakout:M15:2, insideDayBreakout:H1:2
+STRATEGIES=asianBreakout:M30:2, volBreakout:M30:2, nyOpenBreakout:M15:2
 ```
 
 - `nyOpenBreakout`: takes the first close beyond the 08:30–09:30 New York range (± 5% of the range) between 09:30 and 12:00 NY. The range must be 0.15–1.0 × D1 ATR. SL is the other side of the range, capped at 0.6 × D1 ATR. No trades on FOMC days.

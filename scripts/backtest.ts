@@ -8,6 +8,7 @@
  *   npm run backtest -- --source sim      # offline smoke test (random-walk feed)
  *   npm run backtest -- --portfolio       # STRATEGIES traded together: one position at a time, 3/day shared,
  *                                         # filters ON vs OFF per strategy, combined result + Monte Carlo pass odds
+ *   npm run backtest -- --portfolio --max-open 2   # Monte Carlo for 2 positions at once (table shows 1/2/3)
  *   npm run backtest -- --no-filters      # disable news blackout + range filters (compare with the old results)
  *
  * Same signal code as the live bot (src/strategies/library.ts). Fill = next candle open + spread.
@@ -96,7 +97,7 @@ const GRID: Record<StrategyName, { tfs: EntryTimeframe[]; sessions: Session[]; r
 };
 
 /** The research-plan portfolio, used by --portfolio when STRATEGIES is not set */
-const DEFAULT_PORTFOLIO = 'asianBreakout:M30:2, volBreakout:M30:2, nyOpenBreakout:M15:2, insideDayBreakout:H1:2';
+const DEFAULT_PORTFOLIO = 'asianBreakout:M30:2, volBreakout:M30:2, nyOpenBreakout:M15:2';
 
 /** For every entry candle: index of the last broker D1 candle of an EARLIER server day (yesterday) */
 function mapDailyIdx(ds: Dataset, daily: Dataset): number[] {
@@ -327,23 +328,24 @@ interface Combined {
 }
 
 /** Merge per-strategy trades the way the live bot trades them: one position at a time, max trades/day shared */
-function mergePortfolio(all: BtTrade[], startMs: number, endMs: number, maxPerDay: number = config.maxTradesPerDay): BtTrade[] {
+function mergePortfolio(all: BtTrade[], startMs: number, endMs: number, maxOpen: number = 1, maxPerDay: number = config.maxTradesPerDay): BtTrade[] {
   const sorted = all
     .filter((t) => t.result !== 'OPEN' && t.closedAtMs !== undefined && t.openedAt.getTime() >= startMs && t.openedAt.getTime() <= endMs)
     .sort((a, b) => a.openedAt.getTime() - b.openedAt.getTime());
   const out: BtTrade[] = [];
-  const perDay = new Map<string, { n: number; r: number }>();
-  let busyUntil = 0;
+  const perDay = new Map<string, number>();
+  let open: BtTrade[] = [];
   for (const t of sorted) {
-    if (t.openedAt.getTime() < busyUntil) continue;
+    const now = t.openedAt.getTime();
+    open = open.filter((o) => o.closedAtMs! > now);
+    if (open.length >= maxOpen) continue;
+    if (open.some((o) => o.side !== t.side || o.sleeve === t.sleeve)) continue; // no hedging, one per strategy
     const day = getZonedTime(t.openedAt).dateKey;
-    const d = perDay.get(day) ?? { n: 0, r: 0 };
-    if (d.n >= maxPerDay || d.r <= -maxPerDay) continue;
-    d.n++;
-    d.r += t.r;
-    perDay.set(day, d);
+    const n = perDay.get(day) ?? 0;
+    if (n >= maxPerDay) continue;
+    perDay.set(day, n + 1);
     out.push(t);
-    busyUntil = t.closedAtMs!;
+    open.push(t);
   }
   return out;
 }
@@ -429,18 +431,26 @@ function runPortfolio(
     console.log(row('', 'OFF', stats(inWin(p.off), weeks, splitMs)));
   }
 
-  const combinedOn = mergePortfolio(perSleeve.flatMap((p) => p.on), startMs, endMs);
-  const combinedOff = mergePortfolio(perSleeve.flatMap((p) => p.off), startMs, endMs);
-  const sOn = stats(combinedOn, weeks, splitMs);
-  const sOff = stats(combinedOff, weeks, splitMs);
-  console.log('\n=== PORTFOLIO (one position at a time, max ' + config.maxTradesPerDay + '/day shared — exactly how the live bot trades) ===');
+  const chosen = Math.min(Math.max(parseInt(arg('max-open', String(config.maxOpenPositions)), 10) || 1, 1), 3);
+  console.log('\n=== PORTFOLIO (max ' + config.maxTradesPerDay + '/day shared; N open = positions at once, same direction only, one per strategy) ===');
   console.log(hdr);
-  console.log(row('ALL STRATEGIES', 'ON', sOn));
-  console.log(row('ALL STRATEGIES', 'OFF', sOff));
-  console.log('  contribution (filters ON): ' + perSleeve.map((p) => {
+  const byOpen = new Map<number, BtTrade[]>();
+  for (const n of [1, 2, 3]) {
+    const on = mergePortfolio(perSleeve.flatMap((p) => p.on), startMs, endMs, n);
+    byOpen.set(n, on);
+    console.log(row(`ALL, ${n} open${n === chosen ? ' (selected)' : ''}`, 'ON', stats(on, weeks, splitMs)));
+  }
+  console.log(row('ALL, 1 open', 'OFF', stats(mergePortfolio(perSleeve.flatMap((p) => p.off), startMs, endMs, 1), weeks, splitMs)));
+  const combinedOn = byOpen.get(chosen)!;
+  const sOn = stats(combinedOn, weeks, splitMs);
+  console.log(`  contribution (filters ON, ${chosen} open): ` + perSleeve.map((p) => {
     const mine = combinedOn.filter((t) => t.sleeve === `${p.sleeve.strategy}:${p.sleeve.timeframe}`);
     return `${p.sleeve.id} ${mine.length} trades ${f(mine.reduce((s, t) => s + t.r, 0))}R`;
   }).join(' | '));
+  // worst calendar day of the selected portfolio (FundedNext daily limit = 5% = 6.7 R)
+  const dayR = new Map<string, number>();
+  for (const t of combinedOn) dayR.set(getZonedTime(t.openedAt).dateKey, (dayR.get(getZonedTime(t.openedAt).dateKey) ?? 0) + t.r);
+  console.log(`  worst day: ${f(Math.min(0, ...dayR.values()))}R (daily limit ${f(config.maxDailyLoss / config.riskPerTrade)}R)`);
 
   const p1R = (config.accountBalance * 0.08) / config.riskPerTrade;
   const p2R = (config.accountBalance * 0.05) / config.riskPerTrade;
@@ -456,7 +466,7 @@ function runPortfolio(
         `Phase 2 (${f(p2R)}R): ${f(m2.pass * 100, 0)}% (median ${wk(m2.medianTrades)} wks) | both: ${f(m1.pass * m2.pass * 100, 0)}%`
     );
   };
-  console.log(`\n=== MONTE CARLO (20,000 block-bootstrap runs of the portfolio's own trades, risk $${config.riskPerTrade}) ===`);
+  console.log(`\n=== MONTE CARLO (${chosen} open; 20,000 block-bootstrap runs of the portfolio's own trades, risk $${config.riskPerTrade}) ===`);
   show('all trades', rs);
   show('out-of-sample only', oosRs);
 

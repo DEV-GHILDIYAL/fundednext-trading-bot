@@ -209,6 +209,8 @@ export const config = {
   sleeves,
   // No new entries 15 min before → 30 min after US tier-1 news (FOMC: 60 min after)
   newsFilter: process.env.NEWS_FILTER !== 'false',
+  // Positions open at the same time (1–3), SAME direction only (no hedging). MAX_TRADES_PER_DAY still caps the day.
+  maxOpenPositions: Math.min(Math.max(Math.floor(num(process.env.MAX_OPEN_POSITIONS, 1)), 1), 3),
   // Breakout range length in hours (rolling mode)
   rangeHours: Math.max(1, num(process.env.RANGE_HOURS, 24)),
   // Require the price-action filter to agree with the breakout

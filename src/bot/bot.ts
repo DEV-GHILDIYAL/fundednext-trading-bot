@@ -146,7 +146,8 @@ export class TradingBot {
     );
     logger.info(`Trading pairs: ${PAIR_LIST.join(', ')}`);
     logger.info(
-      `Strategies: ${config.sleeves.map((s) => `${s.id} 1:${s.rewardRatio}`).join(' | ')} | news filter ${config.newsFilter ? 'ON' : 'OFF'}`
+      `Strategies: ${config.sleeves.map((s) => `${s.id} 1:${s.rewardRatio}`).join(' | ')} | news filter ${config.newsFilter ? 'ON' : 'OFF'} | ` +
+        `max ${config.maxOpenPositions} open (same direction)`
     );
     logger.info(
       `Rules: max ${config.maxTradesPerDay}/day | risk ${config.riskPercent}% ($${config.riskPerTrade}) | ` +
@@ -246,8 +247,17 @@ export class TradingBot {
     const price = await marketClient.getCurrentPrice(pair);
     this.updatePair(pair, this.quotePatch(price));
 
-    if (tradeMonitor.getOpenTrades().length > 0) {
-      this.updatePair(pair, { status: 'Position open (no hedging)' });
+    const openTrades = tradeMonitor.getOpenTrades();
+    if (openTrades.length >= config.maxOpenPositions) {
+      this.updatePair(pair, { status: `${openTrades.length} position(s) open (max ${config.maxOpenPositions})` });
+      return;
+    }
+    // Worst case if every open stop AND one more trade lose: must stay inside the daily and max-loss limits
+    const openRisk = openTrades.reduce((s, t) => s + (t.riskAmount ?? config.riskPerTrade), 0);
+    const worstDay = riskManager.getStatus().dailyLossAmount - openRisk - config.riskPerTrade;
+    const worstTotal = tradeJournal.getPhaseSummary().totalPnL - openRisk - config.riskPerTrade;
+    if (worstDay <= -config.maxDailyLoss || worstTotal <= -config.maxTotalLoss) {
+      this.updatePair(pair, { status: 'Open risk too close to a loss limit — no new trade' });
       return;
     }
 
@@ -272,14 +282,18 @@ export class TradingBot {
     const active = config.sleeves.filter((sl) => isWithinTradingSession(now, sl.sessionStart, sl.sessionEnd));
     const statuses: string[] = [];
     for (const sleeve of active) {
-      const opened = await this.scanSleeve(pair, price, sleeve, statuses);
-      if (opened) return; // one position at a time
+      if (openTrades.some((t) => t.sleeve === sleeve.id)) {
+        statuses.push(`${sleeve.id}: own position open`);
+        continue;
+      }
+      const opened = await this.scanSleeve(pair, price, sleeve, statuses, openTrades[0]?.type);
+      if (opened) return; // re-scan next cycle (limits re-checked with the new position)
     }
     if (statuses.length > 0) this.updatePair(pair, { status: statuses.join(' | ') });
   }
 
   /** Evaluate one portfolio strategy on its own timeframe; true when a trade was opened */
-  private async scanSleeve(pair: TradingPair, price: PriceData, sleeve: Sleeve, statuses: string[]): Promise<boolean> {
+  private async scanSleeve(pair: TradingPair, price: PriceData, sleeve: Sleeve, statuses: string[], openSide?: 'BUY' | 'SELL'): Promise<boolean> {
     const status = (text: string) => statuses.push(config.sleeves.length > 1 ? `${sleeve.id}: ${text}` : text);
     const params = { ...defaultStrategyParams(), rangeBars: rangeBarsFor(sleeve.timeframe), rewardRatio: sleeve.rewardRatio };
     const useLibrary = sleeve.strategy !== 'breakout';
@@ -322,6 +336,12 @@ export class TradingBot {
       // A wide spread can be temporary: allow a re-check within the entry window
       if (!/^Skipped: Spread/.test(signal.reasoning)) this.evaluatedCandle.set(evalKey, candleKey);
       status(signal.reasoning.replace(/^Skipped:\s*/, ''));
+      return false;
+    }
+
+    if (openSide && signal.signal !== openSide) {
+      this.evaluatedCandle.set(evalKey, candleKey);
+      status(`${signal.signal} signal skipped — ${openSide} position open (no hedging)`);
       return false;
     }
 
@@ -378,6 +398,7 @@ export class TradingBot {
       ticket: result.ticket,
       lots: result.lots,
       riskAmount: result.riskAmount,
+      sleeve: sleeve.id,
     };
     tradeMonitor.registerTrade(trade);
     tradeJournal.recordOpen(trade);
