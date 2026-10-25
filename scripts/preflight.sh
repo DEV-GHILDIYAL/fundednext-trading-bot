@@ -175,9 +175,9 @@ else
   CH=$(curl -s -m 10 "https://api.telegram.org/bot${TT}/getChat?chat_id=${TC}")
   [ "$(echo "$CH" | js 'd.ok')" = "true" ] && ok "Chat ${TC} reachable" || bad "Telegram chat ${TC} not reachable (send the bot a message first)"
   if [ $SEND_TEST -eq 1 ]; then
-    R=$(curl -s -m 10 "https://api.telegram.org/bot${TT}/sendMessage" -d chat_id="$TC" -d parse_mode=HTML \
+    TG_RES=$(curl -s -m 10 "https://api.telegram.org/bot${TT}/sendMessage" -d chat_id="$TC" -d parse_mode=HTML \
       --data-urlencode text="🧪 <b>Pre-flight check</b>"$'\n'"Telegram alerts work. $(TZ=Asia/Kolkata date '+%d %b %H:%M') IST")
-    [ "$(echo "$R" | js 'd.ok')" = "true" ] && ok "Test message sent" || bad "Test message failed"
+    [ "$(echo "$TG_RES" | js 'd.ok')" = "true" ] && ok "Test message sent" || bad "Test message failed"
   else
     info "Add --send-test to send one test message"
   fi
@@ -227,13 +227,15 @@ else
     OUT=""; for i in $(seq 1 20); do
       sleep 3
       ST=$($AWS_BIN ssm get-command-invocation --region "$REGION" --command-id "$CID" --instance-id "$WIN_ID" --query Status --output text 2>/dev/null)
-      case "$ST" in Success|Failed|Cancelled|TimedOut) OUT=$($AWS_BIN ssm get-command-invocation --region "$REGION" --command-id "$CID" --instance-id "$WIN_ID" --query StandardOutputContent --output text); break ;; esac
+      case "$ST" in Success|Failed|Cancelled|TimedOut) OUT=$($AWS_BIN ssm get-command-invocation --region "$REGION" --command-id "$CID" --instance-id "$WIN_ID" --query StandardOutputContent --output text | tr -d '\r'); break ;; esac
     done
     if [ -z "$OUT" ]; then warn "Windows check did not finish in 60 s (status ${ST:-?})"; else
       echo "$OUT" | grep -q "MT5_TERMINAL=running" && ok "MT5 terminal running" || bad "MT5 terminal NOT running on Windows"
       echo "$OUT" | grep -q "UVICORN=running" && ok "Bridge process running" || bad "Bridge process not found"
       echo "$OUT" | grep -q "BRIDGE_TASK=Running" && ok "MT5Bridge scheduled task running" || warn "MT5Bridge task: $(echo "$OUT" | grep BRIDGE_TASK | cut -d= -f2)"
-      echo "$OUT" | grep -q "SESSION=active" && ok "Administrator session logged on (needed for MT5)" || warn "Windows session: $(echo "$OUT" | grep SESSION | cut -d= -f2-) — MT5 needs a logged-on session"
+      if echo "$OUT" | grep -q "SESSION=active"; then ok "Administrator session logged on (needed for MT5)"
+      elif echo "$OUT" | grep -qi "administrator.*Disc"; then ok "Administrator session logged on (disconnected — fine, MT5 keeps running)"
+      else bad "No logged-on Windows session — MT5 needs one (reboot the Windows host so auto-logon runs)"; fi
       info "Windows free RAM $(echo "$OUT" | grep FREE_RAM_MB | cut -d= -f2) MB · uptime $(echo "$OUT" | grep UPTIME_H | cut -d= -f2) h"
     fi
   fi
