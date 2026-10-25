@@ -4,6 +4,8 @@ import { config } from '../config';
 import { riskManager } from '../services/riskManager';
 import { tradeMonitor } from '../services/tradeMonitor';
 import { isAnySleeveInSession as isWithinTradingSession } from '../utils/time';
+import { alerts } from '../services/alerts';
+import { newsCalendar } from '../strategies/news';
 
 export class BotScheduler {
   private tasks: Map<string, cron.ScheduledTask> = new Map();
@@ -28,6 +30,17 @@ export class BotScheduler {
           `Realized $${risk.dailyLossAmount.toFixed(2)} | Trades ${risk.tradesExecuted}/${config.maxTradesPerDay}`
       );
     });
+
+    const ist = { timezone: 'Asia/Kolkata' };
+    // 12:40 IST: today's Fib Sweep levels (or "no trading today" on major news days)
+    this.add('fibLevels', '40 12 * * 1-5', ist, () => {
+      void newsCalendar
+        .majorNewsDay(new Date())
+        .catch(() => null)
+        .then((day) => alerts.fibLevels(config.newsFilter ? day : null));
+    });
+    // 23:30 IST: daily summary
+    this.add('dailySummary', '30 23 * * 1-5', ist, () => alerts.dailySummary());
 
     logger.info(`⏰ Scheduler ready (${this.tasks.size} tasks, timezone ${config.timezone})`);
   }

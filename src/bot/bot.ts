@@ -13,6 +13,7 @@ import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
 import { riskManager } from '../services/riskManager';
 import { tradeJournal } from '../services/tradeJournal';
 import { notifier } from '../services/notifier';
+import { alerts } from '../services/alerts';
 import { Calculator } from '../utils/calculator';
 import { PAIR_LIST, TradingPair, getPairSpec } from '../constants/pairs';
 import { getZonedTime, formatClock, isWithinTradingSession, isAnySleeveInSession, isWeekend, liveServerOffsetMs } from '../utils/time';
@@ -77,6 +78,9 @@ export class TradingBot {
   private startedAt: Date | null = null;
   private lastCycleAt: Date | null = null;
   private feedOk = true;
+  /** When the MT5 feed started failing (alert only after 3 min, never on weekends) */
+  private feedDownSince: number | null = null;
+  private feedAlerted = false;
   /** Last closed candle already evaluated per pair (one decision per 1H candle) */
   private evaluatedCandle = new Map<string, string>();
   private lastRiskReason = '';
@@ -134,8 +138,9 @@ export class TradingBot {
   private async validateSetup(): Promise<void> {
     const feedOk = await marketClient.validateConnection();
     if (!feedOk) {
-      void notifier.notify('error', `MT5 bridge not reachable at startup (${config.mt5BridgeUrl}). Will keep retrying.`, 'feed-down');
+      logger.error(`MT5 bridge not reachable at startup (${config.mt5BridgeUrl}). Will keep retrying.`);
       this.feedOk = false;
+      this.feedDownSince = Date.now();
     }
 
     if (config.aiReviewEnabled) {
@@ -183,10 +188,15 @@ export class TradingBot {
         `min ${config.minTradingDaysPerPhase} trading days/phase` +
         (config.phaseStartDate ? ` since ${config.phaseStartDate}` : '')
     );
-    void notifier.notify(
-      'info',
-      `Started — ${tradeExecutor.isDryRun ? 'PAPER' : 'LIVE'} on ${marketClient.name} data, ` +
-        `${PAIR_LIST.join(', ')}, risk $${config.riskPerTrade}/trade, open trades: ${tradeMonitor.getOpenTrades().length}`
+    let account = marketClient.isSimulated ? 'simulated feed' : 'MT5';
+    if (!marketClient.isSimulated) {
+      const acc = await mt5Bridge.account().catch(() => null);
+      if (acc) account = `${acc.login} @ ${acc.server} · ${acc.currency} ${acc.balance.toFixed(2)}`;
+    }
+    alerts.startup(
+      `${tradeExecutor.isDryRun ? 'PAPER (simulated fills)' : 'LIVE orders'} · AI review ${config.aiReviewEnabled ? 'ON' : 'OFF'}`,
+      account,
+      config.sleeves.map((sl) => `${sl.strategy} ${sl.timeframe} 1:${sl.rewardRatio}`).join(', ')
     );
   }
 
@@ -222,13 +232,21 @@ export class TradingBot {
 
   /** Alert once when the data feed (MT5 bridge) goes down, and once when it recovers */
   private markFeed(ok: boolean, error?: unknown): void {
-    if (ok && !this.feedOk) {
+    if (ok) {
+      if (this.feedDownSince !== null && this.feedAlerted) alerts.feedRecovered(Date.now() - this.feedDownSince);
       this.feedOk = true;
-      notifier.reset('feed-down');
-      void notifier.notify('success', `${marketClient.name} data feed recovered`);
-    } else if (!ok && marketClient.name === 'MT5') {
-      this.feedOk = false;
-      void notifier.notify('error', `MT5 bridge error: ${(error as Error)?.message ?? error}`, 'feed-down', 30 * 60 * 1000);
+      this.feedDownSince = null;
+      this.feedAlerted = false;
+      return;
+    }
+    if (marketClient.name !== 'MT5') return;
+    this.feedOk = false;
+    this.feedDownSince ??= Date.now();
+    const minutes = Math.floor((Date.now() - this.feedDownSince) / 60000);
+    // short blips (broker maintenance, bridge restart) and weekends don't page anyone
+    if (minutes >= 3 && !isWeekend()) {
+      alerts.feedDown(minutes, String((error as Error)?.message ?? error));
+      this.feedAlerted = true;
     }
   }
 
@@ -444,11 +462,12 @@ export class TradingBot {
     riskManager.recordTradeOpened();
     this.updatePair(pair, { status: `${trade.type} opened [${sleeve.id}]` });
     status(`${trade.type} opened @ ${trade.entryPrice}`);
-    void notifier.notify(
-      'info',
-      `${tradeExecutor.isDryRun ? '[PAPER] ' : ''}${trade.type} ${result.lots} lot ${pair} @ ${trade.entryPrice} [${sleeve.id}]\n` +
-        `SL ${trade.stopLoss} | TP ${trade.takeProfit} | risk $${result.riskAmount}`
-    );
+    alerts.tradeOpened(trade, {
+      lots: result.lots,
+      risk: result.riskAmount,
+      confidence: config.aiReviewEnabled ? review.confidence : undefined,
+      reason: signal.reasoning.replace(/^\[[^\]]+\]\s*/, ''),
+    });
     return true;
   }
 
@@ -729,11 +748,7 @@ export class TradingBot {
     tradeJournal.recordClose(trade.tradeId, exitPrice, pnl, reason);
     riskManager.recordTradeClosed(pnl);
     this.updatePair(trade.pair, { status: `Closed (${reason})` });
-    void notifier.notify(
-      pnl >= 0 ? 'success' : 'warn',
-      `${tradeExecutor.isDryRun ? '[PAPER] ' : ''}${trade.type} ${trade.pair} closed (${reason}) @ ${exitPrice}\n` +
-        `P&L $${pnl.toFixed(2)} | today $${riskManager.getStatus().dailyLossAmount.toFixed(2)}`
-    );
+    alerts.tradeClosed(trade, exitPrice, pnl, reason);
   }
 
   /** Close every open position at market (daily loss limit / manual) */

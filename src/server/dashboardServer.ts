@@ -258,7 +258,8 @@ function buildAdvanced(): Record<string, unknown> {
     chart: dd.chart,
     serverOffsetMs: dd.serverOffsetMs,
     fib: config.sleeves.some((sl) => sl.strategy === 'fibSweep') ? dd.fib : null,
-    apiVersion: 3,
+    apiVersion: 4,
+    alertsSent: notifier.sent.slice(-15).reverse(),
     today: dd.today,
     fx: dd.fx,
     health: {
