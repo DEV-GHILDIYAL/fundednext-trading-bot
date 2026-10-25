@@ -148,10 +148,11 @@ export class Mt5BridgeClient {
     return this.call('get', `/tick/${encodeURIComponent(symbol)}`);
   }
 
-  async candles(symbol: string, timeframe: string, count: number): Promise<BridgeCandle[]> {
+  /** `start` > 0 skips the newest bars (history paging; needs the bridge version with ?start=) */
+  async candles(symbol: string, timeframe: string, count: number, start: number = 0): Promise<BridgeCandle[]> {
     const data = await this.call<{ candles: BridgeCandle[] }>(
       'get',
-      `/candles/${encodeURIComponent(symbol)}?timeframe=${timeframe}&count=${count}`
+      `/candles/${encodeURIComponent(symbol)}?timeframe=${timeframe}&count=${count}${start > 0 ? `&start=${start}` : ''}`
     );
     return data.candles;
   }

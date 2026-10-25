@@ -45,13 +45,30 @@ export function nyTimeToUtc(dateKey: string, hour: number, minute: number): Date
 
 /** CPI / PPI release days (NY date, 08:30 ET) from the BLS schedule; live trading also reads them from the feed */
 export const CPI_PPI_DATES: { date: string; title: string }[] = [
+  { date: '2026-05-12', title: 'CPI' },
+  { date: '2026-05-13', title: 'PPI' },
+  { date: '2026-06-10', title: 'CPI' },
+  { date: '2026-06-11', title: 'PPI' },
+  { date: '2026-07-14', title: 'CPI' },
+  { date: '2026-07-15', title: 'PPI' },
   { date: '2026-08-12', title: 'CPI' },
   { date: '2026-08-13', title: 'PPI' },
   { date: '2026-10-14', title: 'CPI' },
   { date: '2026-10-15', title: 'PPI' },
   { date: '2026-11-10', title: 'CPI' },
+  { date: '2026-11-13', title: 'PPI' },
   { date: '2026-12-10', title: 'CPI' },
+  { date: '2026-12-15', title: 'PPI' },
 ];
+
+/** Actual Employment Situation (NFP) dates where BLS moved it off the first Friday; other months use the rule */
+export const NFP_DATES: Record<string, string> = {
+  '2026-05': '2026-05-08',
+  '2026-06': '2026-06-05',
+  '2026-07': '2026-07-02',
+  '2026-08': '2026-08-07',
+  '2026-10': '2026-10-02',
+};
 
 /** Titles that make the whole day a no-trade day for fibSweep */
 export const MAJOR_NEWS = /non-?farm|payroll|\bnfp\b|\bcpi\b|\bppi\b|fomc|federal funds/i;
@@ -76,7 +93,8 @@ export function builtInEvents(from: Date, to: Date): NewsEvent[] {
     const m = d.getUTCMonth();
     const firstDow = new Date(Date.UTC(y, m, 1)).getUTCDay();
     const firstFriday = 1 + ((5 - firstDow + 7) % 7);
-    const key = `${y}-${String(m + 1).padStart(2, '0')}-${String(firstFriday).padStart(2, '0')}`;
+    const ym = `${y}-${String(m + 1).padStart(2, '0')}`;
+    const key = NFP_DATES[ym] ?? `${ym}-${String(firstFriday).padStart(2, '0')}`;
     out.push({ at: nyTimeToUtc(key, 8, 30), title: 'Non-Farm Payrolls' });
   }
   for (const key of FOMC_DATES) out.push({ at: nyTimeToUtc(key, 14, 0), title: 'FOMC statement' });

@@ -69,3 +69,10 @@ def test_manual_close():
     assert r.status_code == 200
     h = client.get(f"/history/position/{ticket}", headers=AUTH).json()
     assert h["closed"] is True and h["exitReason"] == "MANUAL_OR_BOT"
+
+
+def test_candles_paging_with_start():
+    newest = client.get("/candles/XAUUSD?timeframe=H1&count=5", headers=AUTH).json()["candles"]
+    older = client.get("/candles/XAUUSD?timeframe=H1&count=5&start=5", headers=AUTH).json()["candles"]
+    assert len(older) == 5
+    assert older[-1]["time"] < newest[0]["time"]

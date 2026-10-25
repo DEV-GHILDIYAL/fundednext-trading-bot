@@ -282,14 +282,16 @@ def candles(
     symbol: str,
     timeframe: str = Query(default="H1"),
     count: int = Query(default=100, ge=1, le=10000),
+    start: int = Query(default=0, ge=0, le=1_000_000),
 ) -> Dict[str, Any]:
+    """Last `count` bars, skipping the newest `start` bars (start>0 pages back through history)."""
     tf = timeframe.upper()
     if tf not in TIMEFRAMES:
         raise HTTPException(400, f"Unsupported timeframe {timeframe}")
     with _lock:
         ensure_connected()
         sym = check_symbol(symbol)
-        rates = mt5.copy_rates_from_pos(sym, TIMEFRAMES[tf], 0, count)
+        rates = mt5.copy_rates_from_pos(sym, TIMEFRAMES[tf], start, count)
         if rates is None:
             raise HTTPException(503, f"copy_rates failed: {mt5.last_error()}")
         t = mt5.symbol_info_tick(sym)

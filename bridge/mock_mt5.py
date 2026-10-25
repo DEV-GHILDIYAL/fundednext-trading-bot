@@ -149,7 +149,7 @@ def copy_rates_from_pos(symbol: str, timeframe: int, start: int, count: int) -> 
         _step()
         secs = _TF_SECONDS[timeframe]
         now = int(time.time())
-        cur_start = now - now % secs
+        cur_start = now - now % secs - start * secs
         rng = random.Random(cur_start // secs)
         scale = 8.0 * math.sqrt(secs / 3600) * VOL
         bars: List[Dict[str, Any]] = []

@@ -17,17 +17,24 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
  * Current wall-clock time in the bot's timezone (default Asia/Kolkata).
  * Works the same whether the server runs in UTC (EC2) or IST (your laptop).
  */
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
 export function getZonedTime(date: Date = new Date(), timeZone: string = config.timezone): ZonedTime {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    weekday: 'short',
-    hourCycle: 'h23',
-  }).formatToParts(date);
+  let fmt = FORMATTERS.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      weekday: 'short',
+      hourCycle: 'h23',
+    });
+    FORMATTERS.set(timeZone, fmt);
+  }
+  const parts = fmt.formatToParts(date);
 
   const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? '';
   const hour = parseInt(get('hour'), 10) % 24;

@@ -102,6 +102,11 @@ export interface LibContext {
   useFilters?: boolean;
   /** Set on days with NFP / CPI / PPI / FOMC (fibSweep skips the whole day) */
   newsDay?: string | null;
+  /**
+   * fibSweep research option (OFF unless given): trend direction per candle (+1 up, −1 down, 0 unknown).
+   * When set, setups against the trend are ignored (SHORT only in a downtrend, LONG only in an uptrend).
+   */
+  fibTrend?: number[];
 }
 
 /** Filter settings from the research plan */
@@ -721,7 +726,12 @@ export const FIB_SWEEP = {
 function fibSweep(ctx: LibContext): LibResult {
   const { candles: c, i } = ctx;
   const F = FIB_SWEEP;
-  const ist = (j: number) => getZonedTime(ctx.toUtc(c[j].timestamp), 'Asia/Kolkata');
+  // India has no DST: IST = UTC + 5:30 (fast path — this replays a whole day on every candle)
+  const ist = (j: number) => {
+    const d = new Date(ctx.toUtc(c[j].timestamp).getTime() + 330 * 60000);
+    const minutesOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
+    return { minutesOfDay, weekday: d.getUTCDay(), dateKey: d.toISOString().slice(0, 10) };
+  };
   const now = ist(i);
   if (now.weekday === 0 || now.weekday === 6) return skip('Weekend');
   if (now.minutesOfDay < F.entryFrom) return skip('Waiting for 14:30 IST');
@@ -813,6 +823,11 @@ function fibSweep(ctx: LibContext): LibResult {
     if (!entry) continue;
 
     const isNow = j === i;
+    const trend = ctx.fibTrend?.[j];
+    if (trend && (entry.side === 'BUY' ? trend < 0 : trend > 0)) {
+      if (isNow) return skip(`${entry.side} sweep ignored — against the ${trend > 0 ? 'up' : 'down'}trend`);
+      continue;
+    }
     const price = isNow ? (entry.side === 'BUY' ? ctx.quote.ask : ctx.quote.bid) : b.close;
     const sl = entry.side === 'BUY' ? entry.ext - F.slBuffer : entry.ext + F.slBuffer;
     const risk = entry.side === 'BUY' ? price - (entry.ext - F.riskBuffer) : entry.ext + F.riskBuffer - price;
