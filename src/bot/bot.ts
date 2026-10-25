@@ -18,6 +18,19 @@ import { PAIR_LIST, TradingPair, getPairSpec } from '../constants/pairs';
 import { getZonedTime, formatClock, isWithinTradingSession, isAnySleeveInSession, isWeekend } from '../utils/time';
 
 const HOUR_MS = 60 * 60 * 1000;
+
+/** What each strategy is trying to do — tells the Groq reviewer what a good setup looks like */
+const STRATEGY_BRIEF: Partial<Record<string, string>> = {
+  fibSweep:
+    'Liquidity-sweep REVERSAL. The 11:30–12:30 IST candle-body range defines Fib lines 2 (above) and −1 (below). ' +
+    'Price closed beyond a line (sweep leg), then a candle wicked beyond and closed back inside; the trade goes AGAINST the sweep ' +
+    '(line 2 → SELL, line −1 → BUY), SL beyond the leg extreme, TP 2× risk. Approve when the sweep looks like a stop-run that is ' +
+    'being rejected (long wick, momentum fading, back inside). SKIP when it looks like a genuine trend breakout that is likely to ' +
+    'continue (strong closes beyond the line, trade against a clear H1 trend, no rejection), or when TP runs into a major level.',
+  asianBreakout: 'Breakout of the Asian-session range at the London open, trading WITH the break.',
+  volBreakout: "Volatility breakout: price moved more than half of yesterday's range from today's open, trading WITH the move.",
+  nyOpenBreakout: 'Breakout of the 08:30–09:30 New York opening range, trading WITH the break.',
+};
 const tfMs = (tf: EntryTimeframe): number => TIMEFRAME_MINUTES[tf] * 60 * 1000;
 /** A signal candle is only traded within this many minutes after it closes (max half a candle) */
 export const entryWindowMinutes = (tf: EntryTimeframe): number => Math.min(15, TIMEFRAME_MINUTES[tf] / 2);
@@ -480,6 +493,7 @@ export class TradingBot {
     const htfDir = await this.higherTimeframeTrend(pair, closed[i], sleeve);
     const daily = await this.dailyContext(pair, closed[i]);
     const newsBlock = config.newsFilter ? await newsCalendar.check(new Date()) : null;
+    const newsDay = config.newsFilter ? await newsCalendar.majorNewsDay(new Date()) : null;
     const tfMin = TIMEFRAME_MINUTES[sleeve.timeframe];
     const r = evaluateStrategy(sleeve.strategy, {
       pair,
@@ -499,6 +513,7 @@ export class TradingBot {
       htfDir,
       daily,
       newsBlock,
+      newsDay,
     });
     if (!isSignal(r)) return EntrySignalGenerator.skipSignal(pair, r.skip, candleTime);
     if (r.exit === 'supertrend') {
@@ -518,6 +533,7 @@ export class TradingBot {
       riskRewardRatio: sleeve.rewardRatio,
       confidence: 0.6,
       reasoning: `[${sleeve.strategy}] ${r.reason}`,
+      aiContext: await this.marketContext(pair, closed, sleeve).catch(() => undefined),
       meta: {
         rangeHigh: Math.max(...closed.slice(-25, -1).map((c) => c.high)),
         rangeLow: Math.min(...closed.slice(-25, -1).map((c) => c.low)),
@@ -527,6 +543,28 @@ export class TradingBot {
       },
       components: { ...base.components, priceAction: { ...base.components.priceAction, pattern: sleeve.strategy, direction: dir, description: r.reason } },
     };
+  }
+
+  /** Trend + recent candles for the Groq review */
+  private async marketContext(pair: string, closed: CandleData[], sleeve: Sleeve): Promise<string> {
+    const ind = computeIndicators(closed);
+    const i = closed.length - 1;
+    const last = closed[i];
+    const lines: string[] = [];
+    const rel = (v: number) => (Number.isFinite(v) ? `${last.close > v ? 'above' : 'below'} (${v.toFixed(2)})` : 'n/a');
+    lines.push(`${sleeve.timeframe} close ${last.close} is ${rel(ind.ema50[i])} EMA50 and ${rel(ind.ema200[i])} EMA200; RSI14 ${ind.rsi14[i]?.toFixed(0)}`);
+    const h1 = (await marketClient.getCandles(pair, 'H1', INDICATOR_WARMUP + 10)).filter((c) => c.closed !== false);
+    if (h1.length > 210) {
+      const hi = computeIndicators(h1);
+      const k = h1.length - 1;
+      const trend = hi.ema50[k] > hi.ema200[k] ? 'UP' : 'DOWN';
+      lines.push(`H1 trend: ${trend} (EMA50 ${hi.ema50[k].toFixed(2)} vs EMA200 ${hi.ema200[k].toFixed(2)}), H1 close ${h1[k].close}`);
+      const day = h1.slice(-24);
+      lines.push(`Last 24h high/low: ${Math.max(...day.map((c) => c.high))} / ${Math.min(...day.map((c) => c.low))}`);
+    }
+    lines.push(`Last 8 ${sleeve.timeframe} candles (oldest→newest, O/H/L/C):`);
+    for (const c of closed.slice(-8)) lines.push(`  ${c.open}/${c.high}/${c.low}/${c.close}`);
+    return lines.join('\n');
   }
 
   /** Closed broker D1 candles + index of yesterday relative to the signal candle's server day */
@@ -557,8 +595,10 @@ export class TradingBot {
   ): Promise<{ verdict: AiVerdict; decision?: string; confidence?: number; reasoning?: string }> {
     if (!config.aiReviewEnabled) return { verdict: 'approved', reasoning: 'AI review disabled' };
 
+    const brief = STRATEGY_BRIEF[sleeve.strategy];
     const prompt = [
       `Instrument: ${signal.pair} (gold, 1 pip = 0.1), ${sleeve.timeframe} candles`,
+      ...(brief ? [`Strategy logic: ${brief}`] : []),
       `Strategy: ${sleeve.strategy} — ${signal.reasoning}`,
       `Proposed side: ${signal.signal}`,
       `Entry: ${signal.entryPrice}`,
@@ -567,10 +607,15 @@ export class TradingBot {
       `Risk/reward: 1:${signal.riskRewardRatio}`,
       `Broken range (${config.rangeMode === 'prevDay' ? 'previous day' : `last ${config.rangeHours}h`}): ${signal.meta?.rangeLow} – ${signal.meta?.rangeHigh}`,
       `ATR(14, ${sleeve.timeframe}): ${atrPips.toFixed(1)} pips | spread ${signal.meta?.spreadPips} pips`,
-      `Breakout strength: ${signal.components.breakout.strength}/100`,
-      `Price action: ${signal.components.priceAction.pattern} (${signal.components.priceAction.direction})`,
-      `Nearest support: ${signal.components.supportResistance.support?.level ?? 'none'}`,
-      `Nearest resistance: ${signal.components.supportResistance.resistance?.level ?? 'none'}`,
+      ...(sleeve.strategy === 'breakout'
+        ? [
+            `Breakout strength: ${signal.components.breakout.strength}/100`,
+            `Price action: ${signal.components.priceAction.pattern} (${signal.components.priceAction.direction})`,
+            `Nearest support: ${signal.components.supportResistance.support?.level ?? 'none'}`,
+            `Nearest resistance: ${signal.components.supportResistance.resistance?.level ?? 'none'}`,
+          ]
+        : []),
+      ...(signal.aiContext ? ['Market context:', signal.aiContext] : []),
       `Fixed risk: $${config.riskPerTrade} per trade (${config.riskPercent}% of $${config.accountBalance}). ` +
         'Reject setups that contradict the strategy logic or run straight into a nearby level.',
     ].join('\n');

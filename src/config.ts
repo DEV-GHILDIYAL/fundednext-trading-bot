@@ -34,6 +34,7 @@ const STRATEGIES = [
   'emaRangeBreakout',
   'nyOpenBreakout',
   'insideDayBreakout',
+  'fibSweep',
 ] as const;
 export type StrategyKey = (typeof STRATEGIES)[number];
 
@@ -55,6 +56,8 @@ export const DEFAULT_SLEEVE_SESSION: Partial<Record<StrategyKey, [string, string
   // these two have their own time rules (NY 09:30–12:00 / any time of the broker day)
   nyOpenBreakout: ['00:00', '24:00'],
   insideDayBreakout: ['00:00', '24:00'],
+  // own IST clock: range 11:30–12:30, entries 14:30–21:00
+  fibSweep: ['00:00', '24:00'],
 };
 
 /**

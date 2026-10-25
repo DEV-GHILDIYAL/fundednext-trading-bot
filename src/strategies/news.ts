@@ -43,7 +43,31 @@ export function nyTimeToUtc(dateKey: string, hour: number, minute: number): Date
   return new Date(Date.UTC(y, m - 1, d, hour + 5, minute));
 }
 
-/** Built-in schedule between two UTC instants: NFP (first Friday 08:30 ET) + FOMC (14:00 ET) */
+/** CPI / PPI release days (NY date, 08:30 ET) from the BLS schedule; live trading also reads them from the feed */
+export const CPI_PPI_DATES: { date: string; title: string }[] = [
+  { date: '2026-08-12', title: 'CPI' },
+  { date: '2026-08-13', title: 'PPI' },
+  { date: '2026-10-14', title: 'CPI' },
+  { date: '2026-10-15', title: 'PPI' },
+  { date: '2026-11-10', title: 'CPI' },
+  { date: '2026-12-10', title: 'CPI' },
+];
+
+/** Titles that make the whole day a no-trade day for fibSweep */
+export const MAJOR_NEWS = /non-?farm|payroll|\bnfp\b|\bcpi\b|\bppi\b|fomc|federal funds/i;
+
+/** IST date keys (YYYY-MM-DD) that have a major US release (NFP, CPI, PPI, FOMC) */
+export function majorNewsDays(events: NewsEvent[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const e of events) {
+    if (!MAJOR_NEWS.test(e.title)) continue;
+    const key = getZonedTime(e.at, 'Asia/Kolkata').dateKey;
+    if (!out.has(key)) out.set(key, e.title);
+  }
+  return out;
+}
+
+/** Built-in schedule between two UTC instants: NFP (first Friday 08:30 ET) + FOMC (14:00 ET) + known CPI/PPI */
 export function builtInEvents(from: Date, to: Date): NewsEvent[] {
   const out: NewsEvent[] = [];
   const start = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
@@ -56,6 +80,7 @@ export function builtInEvents(from: Date, to: Date): NewsEvent[] {
     out.push({ at: nyTimeToUtc(key, 8, 30), title: 'Non-Farm Payrolls' });
   }
   for (const key of FOMC_DATES) out.push({ at: nyTimeToUtc(key, 14, 0), title: 'FOMC statement' });
+  for (const r of CPI_PPI_DATES) out.push({ at: nyTimeToUtc(r.date, 8, 30), title: r.title });
   return out.filter((e) => e.at.getTime() >= from.getTime() - 86400000 && e.at.getTime() <= to.getTime() + 86400000);
 }
 
@@ -135,6 +160,14 @@ export class NewsCalendar {
     }
     // retry a failed fetch after 30 min instead of 6 h
     this.fetchedAt = this.lastError ? Date.now() - 5.5 * 3600000 : Date.now();
+  }
+
+  /** "Major US news day (CPI …)" when today (IST) has NFP / CPI / PPI / FOMC, else null */
+  async majorNewsDay(now: Date = new Date()): Promise<string | null> {
+    await this.refresh();
+    const events = [...builtInEvents(new Date(now.getTime() - 2 * 86400000), new Date(now.getTime() + 2 * 86400000)), ...this.feed];
+    const title = majorNewsDays(events).get(getZonedTime(now, 'Asia/Kolkata').dateKey);
+    return title ? `Major US news day (${title})` : null;
   }
 
   /** Events from 1 h ago to `hours` ahead (built-in + feed, de-duplicated), oldest first */

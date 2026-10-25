@@ -324,8 +324,8 @@ describe('Strategy library: educator strategies', () => {
       return { timestamp: new Date(start + k * 3600e3), open: base, high: base + 4, low: base - 4, close: base + 1, closed: true };
     });
 
-  it('exposes all 17 strategies', () => {
-    expect(STRATEGY_NAMES).toHaveLength(17);
+  it('exposes all 18 strategies', () => {
+    expect(STRATEGY_NAMES).toHaveLength(18);
   });
 
   it('turtle20 buys the first close above the 20-bar high with a 2×ATR stop', () => {

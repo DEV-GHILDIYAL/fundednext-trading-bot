@@ -46,6 +46,12 @@ STRATEGIES=asianBreakout:M30:2, volBreakout:M30:2, nyOpenBreakout:M15:2
 - Filters:
   - **News blackout** (`NEWS_FILTER=true`): no new entries from 15 min before to 30 min after US tier-1 news (60 min after FOMC). Uses the ForexFactory feed plus a built-in NFP/FOMC schedule.
   - asianBreakout skips Asian ranges outside 0.10–0.80 × D1 ATR.
+- `fibSweep` (M5, IST clock): takes the candle-body range of 11:30–12:30 IST and draws lines at Fib 2 (low + 2 × range) and −1 (low − range). From 14:30 IST it waits for a close inside a line, then a sweep leg of one or more closes beyond it, then a candle that wicks beyond and closes back inside. It trades against the sweep: line 2 → SHORT, line −1 → LONG.
+  - SL: leg extreme ± 2. TP: 2 × (entry ↔ leg extreme ± 1).
+  - No new entries after 21:00 IST. Max 2 trades a day: a first TP ends the day, a first SL allows one more setup.
+  - NFP, CPI, PPI and FOMC days are skipped.
+  - Groq gets a strategy brief, the H1 trend and the recent candles, and rejects sweeps that look like real trend breakouts.
+  - Test it: `npm run backtest -- --strategies --only fibSweep --trades`
 - `npm run backtest -- --portfolio` simulates exactly this: each strategy with filters ON vs OFF, the combined portfolio, and Monte Carlo pass odds for both phases. Add `--why` to see skip reasons.
 - `npm run ai-audit` replays every Groq-approved and Groq-rejected signal (`data/ai-reviews.jsonl`) on MT5 candles, to show whether the AI veto adds value.
 

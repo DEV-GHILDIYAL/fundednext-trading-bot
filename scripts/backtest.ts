@@ -9,6 +9,7 @@
  *   npm run backtest -- --portfolio       # STRATEGIES traded together: one position at a time, 3/day shared,
  *                                         # filters ON vs OFF per strategy, combined result + Monte Carlo pass odds
  *   npm run backtest -- --portfolio --max-open 2   # Monte Carlo for 2 positions at once (table shows 1/2/3)
+ *   npm run backtest -- --strategies --only fibSweep --trades   # Fib Sweep on M5 (~7 weeks), every trade listed
  *   npm run backtest -- --no-filters      # disable news blackout + range filters (compare with the old results)
  *
  * Same signal code as the live bot (src/strategies/library.ts). Fill = next candle open + spread.
@@ -18,7 +19,7 @@
  * NOT modelled: Groq review, slippage, swap, commission, news spread spikes.
  */
 import { config, EntryTimeframe, TIMEFRAME_MINUTES, Sleeve, parseSleeves } from '../src/config';
-import { builtInEvents, NewsIndex } from '../src/strategies/news';
+import { builtInEvents, NewsIndex, majorNewsDays } from '../src/strategies/news';
 import { monteCarloPass } from '../src/utils/monteCarlo';
 import { createMarketDataSource, CandleData, MarketDataSource } from '../src/api/market';
 import { defaultStrategyParams, rangeBarsFor } from '../src/strategies/entrySignalGenerator';
@@ -94,6 +95,8 @@ const GRID: Record<StrategyName, { tfs: EntryTimeframe[]; sessions: Session[]; r
   // own time rules (NY 09:30–12:00 / any time of the broker day)
   nyOpenBreakout: { tfs: ['M15', 'M30'], sessions: [SESSIONS.Any], rr: [1.5, 2] },
   insideDayBreakout: { tfs: ['H1', 'M30'], sessions: [SESSIONS.Any], rr: [1.5, 2] },
+  // own IST clock (range 11:30–12:30, entries 14:30–21:00)
+  fibSweep: { tfs: ['M5'], sessions: [SESSIONS.Any], rr: [2] },
 };
 
 /** The research-plan portfolio, used by --portfolio when STRATEGIES is not set */
@@ -160,10 +163,12 @@ interface Extras {
   daily?: Dataset;
   dailyIdx?: number[];
   news?: NewsIndex;
+  /** IST date → major release title (NFP/CPI/PPI/FOMC) */
+  majorDays?: Map<string, string>;
 }
 
 function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number, extras: Extras = {}): BtTrade[] {
-  const { htfDir, daily, dailyIdx, news } = extras;
+  const { htfDir, daily, dailyIdx, news, majorDays } = extras;
   const filters = v.filters !== false;
   const pair = PAIR_LIST[0];
   const spec = getPairSpec(pair);
@@ -242,6 +247,9 @@ function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number, 
       htfDir: htfDir ? htfDir[i] : undefined,
       daily: daily && dailyIdx && dailyIdx[i] >= 0 ? { candles: daily.candles, idx: dailyIdx[i] } : undefined,
       newsBlock: filters && news ? news.check(closeAt) : null,
+      newsDay: filters && majorDays?.has(getZonedTime(closeAt, 'Asia/Kolkata').dateKey)
+        ? `Major US news day (${majorDays.get(getZonedTime(closeAt, 'Asia/Kolkata').dateKey)})`
+        : null,
       useFilters: filters,
     });
     if (!isSignal(result)) {
@@ -579,9 +587,9 @@ async function main(): Promise<void> {
 
   const d1 = datasets.get('D1')!;
   const allTimes = Array.from(datasets.values()).flatMap((d) => (d.candles.length ? [d.candles[0].timestamp, d.candles[d.candles.length - 1].timestamp] : []));
-  const news = new NewsIndex(
-    builtInEvents(new Date(Math.min(...allTimes.map((t) => t.getTime())) - 86400000), new Date(Math.max(...allTimes.map((t) => t.getTime())) + 86400000))
-  );
+  const events = builtInEvents(new Date(Math.min(...allTimes.map((t) => t.getTime())) - 86400000), new Date(Math.max(...allTimes.map((t) => t.getTime())) + 86400000));
+  const news = new NewsIndex(events);
+  const majorDays = majorNewsDays(events);
   const extrasFor = (strategy: StrategyName, tf: EntryTimeframe): Extras => {
     const ds = datasets.get(tf)!;
     const htfTf = htfOf(strategy, tf);
@@ -590,6 +598,7 @@ async function main(): Promise<void> {
       daily: d1,
       dailyIdx: mapDailyIdx(ds, d1),
       news,
+      majorDays,
     };
   };
 
@@ -641,9 +650,26 @@ async function main(): Promise<void> {
 
     console.log('\n=== BEST ROW PER STRATEGY (by Net R) ===');
     console.log(header);
+    const bests: typeof rows = [];
     for (const name of names) {
       const best = rows.filter((r) => r.v.strategy === name).sort((a, b) => b.s.netR - a.s.netR)[0];
-      if (best) console.log(line(best));
+      if (best) {
+        console.log(line(best));
+        bests.push(best);
+      }
+    }
+    if (process.argv.includes('--trades')) {
+      for (const best of bests) {
+        const done = best.trades.filter((x) => x.result !== 'OPEN');
+        const buys = done.filter((x) => x.side === 'BUY');
+        const sells = done.filter((x) => x.side === 'SELL');
+        const wr = (ts: typeof done) => (ts.length ? ((ts.filter((x) => x.r > 0).length / ts.length) * 100).toFixed(0) : '0');
+        console.log(`\n--- ${best.v.strategy} ${best.v.timeframe}: every trade (opened, IST) — BUY ${buys.length} (${wr(buys)}% win), SELL ${sells.length} (${wr(sells)}% win) ---`);
+        for (const t of done) {
+          const ist = t.openedAt.toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+          console.log(`  ${ist}  ${t.side.padEnd(4)} ${t.entry.toFixed(2)}  SL ${t.sl.toFixed(2)}  TP ${t.tp.toFixed(2)}  → ${t.result} (${t.r.toFixed(2)}R)`);
+        }
+      }
     }
   } else {
     console.log('');

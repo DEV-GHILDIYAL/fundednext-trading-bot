@@ -18,6 +18,8 @@ export interface TradeSignal {
   reasoning: string;
   /** Open time of the closed candle that produced the signal (one signal per candle) */
   candleTime: string | null;
+  /** Extra market context for the Groq review (trend, recent candles) */
+  aiContext?: string;
   meta: {
     rangeHigh: number;
     rangeLow: number;

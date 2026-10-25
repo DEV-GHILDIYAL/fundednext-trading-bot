@@ -214,10 +214,17 @@ function buildAdvanced(): Record<string, unknown> {
         window: fullDay
           ? sl.strategy === 'nyOpenBreakout'
             ? '09:30–12:00 New York'
-            : 'Any time (own rules)'
+            : sl.strategy === 'fibSweep'
+              ? 'Range 11:30–12:30 IST · entries 14:30–21:00 IST'
+              : 'Any time (own rules)'
           : `${sessionClockInDisplayZone(sl.sessionStart, now)}–${sessionClockInDisplayZone(sl.sessionEnd, now)} IST (${formatMinutes(sl.sessionStart)}–${formatMinutes(sl.sessionEnd)} London)`,
         active:
-          sl.strategy === 'nyOpenBreakout'
+          sl.strategy === 'fibSweep'
+            ? (() => {
+                const t = getZonedTime(now, 'Asia/Kolkata');
+                return t.weekday >= 1 && t.weekday <= 5 && t.minutesOfDay >= 14 * 60 + 30 && t.minutesOfDay < 21 * 60;
+              })()
+            : sl.strategy === 'nyOpenBreakout'
             ? (() => {
                 const ny = getZonedTime(now, 'America/New_York');
                 return ny.weekday >= 1 && ny.weekday <= 5 && ny.minutesOfDay > 9 * 60 + 30 && ny.minutesOfDay <= 12 * 60;

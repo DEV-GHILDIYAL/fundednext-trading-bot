@@ -28,6 +28,13 @@
  *                  ± 0.1 × D1 ATR in the SMA5 direction; SL 1 × D1 ATR
  *   Filters: news blackout (US tier-1) on every strategy; asianBreakout range 0.10–0.80 × D1 ATR
  *
+ * Dev's XAUUSD Fib Sweep Strategy (Oct 2026, M5, IST clock):
+ *   fibSweep       body range of the 11:30–12:30 IST candles → lines at Fib 2 (low + 2R) and −1 (low − R).
+ *                  From 14:30 IST: price closes inside a line, then ≥1 candle closes beyond it (sweep leg), then a
+ *                  candle wicks beyond and closes back inside → trade AGAINST the sweep (2 → SHORT, −1 → LONG).
+ *                  SL = leg extreme ± 2, risk for TP = entry ↔ leg extreme ± 1, TP = 2 × risk. Last entry 21:00 IST.
+ *                  Max 2 trades/day: first TP → done; first SL → one more setup. Skips NFP/CPI/PPI/FOMC days.
+ *
  * Every strategy: stop distance clamped to [slMinAtr, slMaxAtr] × ATR, TP = rewardRatio × stop.
  */
 import { CandleData, PriceData, computeAtrPips } from '../api/market';
@@ -55,6 +62,7 @@ export const STRATEGY_NAMES = [
   'emaRangeBreakout',
   'nyOpenBreakout',
   'insideDayBreakout',
+  'fibSweep',
 ] as const;
 export type StrategyName = (typeof STRATEGY_NAMES)[number];
 
@@ -92,6 +100,8 @@ export interface LibContext {
   newsBlock?: string | null;
   /** Research-plan filters (range vs D1 ATR); default true */
   useFilters?: boolean;
+  /** Set on days with NFP / CPI / PPI / FOMC (fibSweep skips the whole day) */
+  newsDay?: string | null;
 }
 
 /** Filter settings from the research plan */
@@ -692,6 +702,143 @@ function insideDayBreakout(ctx: LibContext): LibResult {
   return skip(`Yesterday ${tag} — waiting for breakout`);
 }
 
+/** Fib Sweep settings (Dev's strategy document, Oct 2026). Clock = IST, prices in $ (1 point = $1) */
+export const FIB_SWEEP = {
+  rangeFrom: 11 * 60 + 30, // first range candle (open time)
+  rangeTo: 12 * 60 + 30, // last range candle (open time) → 13 × M5
+  entryFrom: 14 * 60 + 30,
+  entryUntil: 21 * 60, // entry candle must open before 21:00
+  slBuffer: 2,
+  riskBuffer: 1,
+  maxTradesPerDay: 2,
+};
+
+/**
+ * Fib Sweep. Replays today's candles from 14:30 IST up to the signal candle — including the outcome of any
+ * earlier fibSweep trade today (SL/TP on candle highs/lows) — so the live bot and the backtest apply the
+ * "first TP → done, first SL → one more" rule identically without keeping state.
+ */
+function fibSweep(ctx: LibContext): LibResult {
+  const { candles: c, i } = ctx;
+  const F = FIB_SWEEP;
+  const ist = (j: number) => getZonedTime(ctx.toUtc(c[j].timestamp), 'Asia/Kolkata');
+  const now = ist(i);
+  if (now.weekday === 0 || now.weekday === 6) return skip('Weekend');
+  if (now.minutesOfDay < F.entryFrom) return skip('Waiting for 14:30 IST');
+  if (now.minutesOfDay >= F.entryUntil) return skip('After 21:00 IST — no new entries');
+  if (ctx.newsDay) return skip(`${ctx.newsDay} — no trading today`);
+
+  // today's candles (IST date)
+  let first = i;
+  while (first > 0 && i - first < 400 && ist(first - 1).dateKey === now.dateKey) first--;
+  let hi = -Infinity;
+  let lo = Infinity;
+  let rangeBars = 0;
+  let scanFrom = -1;
+  for (let j = first; j <= i; j++) {
+    const m = ist(j).minutesOfDay;
+    if (m >= F.rangeFrom && m <= F.rangeTo) {
+      hi = Math.max(hi, c[j].open, c[j].close);
+      lo = Math.min(lo, c[j].open, c[j].close);
+      rangeBars++;
+    }
+    if (scanFrom < 0 && m >= F.entryFrom) scanFrom = j;
+  }
+  const expected = Math.floor((F.rangeTo - F.rangeFrom) / ctx.tfMinutes) + 1;
+  if (rangeBars < Math.max(1, expected - 2)) return skip(`Incomplete 11:30–12:30 range (${rangeBars}/${expected} candles)`);
+  const range = hi - lo;
+  if (!(range > 0)) return skip('Zero range');
+  const upper = lo + 2 * range; // Fib 2
+  const lower = lo - range; // Fib −1
+  const lv = `range ${lo.toFixed(2)}–${hi.toFixed(2)}, lines 2=${upper.toFixed(2)} / −1=${lower.toFixed(2)}`;
+
+  type State = 'wait' | 'armed' | 'leg';
+  let up: State = 'wait';
+  let dn: State = 'wait';
+  let upExt = -Infinity;
+  let dnExt = Infinity;
+  let open: { side: 'BUY' | 'SELL'; sl: number; tp: number } | null = null;
+  let trades = 0;
+  let done = '';
+
+  for (let j = scanFrom; j <= i && j >= 0; j++) {
+    const b = c[j];
+    if (open) {
+      const hitSl = open.side === 'BUY' ? b.low <= open.sl : b.high >= open.sl;
+      const hitTp = open.side === 'BUY' ? b.high >= open.tp : b.low <= open.tp;
+      if (hitSl || hitTp) {
+        trades++;
+        if (!hitSl) done = 'First trade hit TP — done for today';
+        else if (trades >= F.maxTradesPerDay) done = `${F.maxTradesPerDay} trades stopped out — done for today`;
+        open = null;
+        up = 'wait';
+        dn = 'wait';
+      }
+      if (j === i) return skip(done || (open ? 'Fib Sweep trade still open' : 'Trade just closed'));
+      continue;
+    }
+    if (done) return skip(done);
+
+    let entry: { side: 'BUY' | 'SELL'; ext: number } | null = null;
+    // Fib 2 line (upper) → SHORT
+    if (up === 'wait') {
+      if (b.close <= upper) up = 'armed';
+    } else if (up === 'armed') {
+      if (b.close > upper) {
+        up = 'leg';
+        upExt = b.high;
+      }
+    } else if (b.close > upper) {
+      upExt = Math.max(upExt, b.high);
+    } else if (b.high > upper) {
+      entry = { side: 'SELL', ext: Math.max(upExt, b.high) };
+      up = 'armed';
+    } else up = 'armed';
+    // Fib −1 line (lower) → LONG
+    if (!entry) {
+      if (dn === 'wait') {
+        if (b.close >= lower) dn = 'armed';
+      } else if (dn === 'armed') {
+        if (b.close < lower) {
+          dn = 'leg';
+          dnExt = b.low;
+        }
+      } else if (b.close < lower) {
+        dnExt = Math.min(dnExt, b.low);
+      } else if (b.low < lower) {
+        entry = { side: 'BUY', ext: Math.min(dnExt, b.low) };
+        dn = 'armed';
+      } else dn = 'armed';
+    }
+    if (!entry) continue;
+
+    const isNow = j === i;
+    const price = isNow ? (entry.side === 'BUY' ? ctx.quote.ask : ctx.quote.bid) : b.close;
+    const sl = entry.side === 'BUY' ? entry.ext - F.slBuffer : entry.ext + F.slBuffer;
+    const risk = entry.side === 'BUY' ? price - (entry.ext - F.riskBuffer) : entry.ext + F.riskBuffer - price;
+    if (!(risk > 0) || (entry.side === 'BUY' ? sl >= price : sl <= price)) {
+      if (isNow) return skip('Price already beyond the stop level');
+      continue;
+    }
+    const tp = entry.side === 'BUY' ? price + ctx.rewardRatio * risk : price - ctx.rewardRatio * risk;
+    if (isNow) {
+      return {
+        side: entry.side,
+        entryPrice: round(ctx.pair, price),
+        stopLoss: round(ctx.pair, sl),
+        takeProfit: round(ctx.pair, tp),
+        reason:
+          `Fib ${entry.side === 'SELL' ? '2' : '−1'} line swept (leg ${entry.side === 'SELL' ? 'high' : 'low'} ${entry.ext.toFixed(2)}) ` +
+          `and closed back inside → ${entry.side === 'SELL' ? 'SHORT' : 'LONG'}; ${lv}; trade ${trades + 1}/${F.maxTradesPerDay} today`,
+        exit: 'fixed',
+      };
+    }
+    open = { side: entry.side, sl, tp };
+  }
+  const st = (s: State, name: string) => (s === 'wait' ? `${name}: waiting for a close inside` : s === 'armed' ? `${name}: armed` : `${name}: sweep leg running`);
+  return skip(`No sweep yet — ${st(up, '2')}, ${st(dn, '−1')}; ${lv}`);
+}
+
 const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   breakout,
   trendPullback,
@@ -710,11 +857,12 @@ const IMPL: Record<StrategyName, (ctx: LibContext) => LibResult> = {
   emaRangeBreakout,
   nyOpenBreakout,
   insideDayBreakout,
+  fibSweep,
 };
 
 export function evaluateStrategy(name: StrategyName, ctx: LibContext): LibResult {
   if (ctx.newsBlock) return skip(ctx.newsBlock);
-  if (name === 'supertrend' || name === 'emaRangeBreakout') {
+  if (name === 'supertrend' || name === 'emaRangeBreakout' || name === 'fibSweep') {
     // EA has its own filters (ADX, flips, distance); only the spread check is shared
     if (ctx.quote.spread > ctx.maxSpreadPips) return skip(`Spread ${ctx.quote.spread} > max ${ctx.maxSpreadPips} pips`);
     return IMPL[name](ctx);
