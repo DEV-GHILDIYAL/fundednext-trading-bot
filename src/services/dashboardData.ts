@@ -14,12 +14,13 @@ import { logger } from '../utils/logger';
 import { marketClient, CandleData } from '../api/market';
 import { mt5Bridge, BridgeAccount, BridgePosition } from '../api/mt5Bridge';
 import { newsCalendar, NewsEvent } from '../strategies/news';
-import { liveServerOffsetMs } from '../utils/time';
+import { liveServerOffsetMs, serverToUtc, getZonedTime } from '../utils/time';
+import { FIB_SWEEP } from '../strategies/library';
 import { PAIR_LIST } from '../constants/pairs';
 import { tradeJournal } from './tradeJournal';
 import { tradeMonitor } from './tradeMonitor';
 
-export type ChartTf = 'M15' | 'H1' | 'H4';
+export type ChartTf = 'M5' | 'M15' | 'H1' | 'H4';
 
 export interface DashboardDataSnapshot {
   account: (BridgeAccount & { source: 'MT5' | 'computed'; marginLevel: number | null; floating: number }) | null;
@@ -32,16 +33,19 @@ export interface DashboardDataSnapshot {
   bridge: { ok: boolean; latencyMs: number | null; lastError: string | null; updatedAt: string | null };
   /** MT5 bar times are broker server time written as UTC: subtract this to get real UTC */
   serverOffsetMs: number;
+  /** Today's Fib Sweep levels (11:30–12:30 IST candle-body range) */
+  fib: { date: string; bodyHigh: number; bodyLow: number; range: number; upper: number; lower: number; candles: number } | null;
 }
 
-const CHART_BARS: Record<ChartTf, number> = { M15: 160, H1: 160, H4: 120 };
+const CHART_BARS: Record<ChartTf, number> = { M5: 300, M15: 160, H1: 160, H4: 120 };
 
 export class DashboardData {
   private snap: DashboardDataSnapshot = {
     account: null,
     positions: [],
     dayStart: null,
-    chart: { M15: [], H1: [], H4: [] },
+    chart: { M5: [], M15: [], H1: [], H4: [] },
+    fib: null,
     today: null,
     news: { upcoming: [], blackout: null, feed: newsCalendar.status },
     fx: { usdInr: null, fetchedAt: null },
@@ -121,6 +125,7 @@ export class DashboardData {
       try {
         const bars = await marketClient.getCandles(pair, tf, CHART_BARS[tf]);
         this.snap.chart[tf] = bars.map((b: CandleData) => ({ time: b.timestamp.toISOString(), open: b.open, high: b.high, low: b.low, close: b.close }));
+        if (tf === 'M5') this.snap.fib = this.fibLevels(bars);
       } catch {
         // keep previous candles
       }
@@ -162,6 +167,29 @@ export class DashboardData {
         this.fxFetchedAt = Date.now() - 5 * 3600000; // retry in 1 h
       }
     }
+  }
+
+  /** Body high/low of the latest IST day's 11:30–12:30 M5 candles → Fib 2 / −1 lines */
+  private fibLevels(bars: CandleData[]): DashboardDataSnapshot['fib'] {
+    const toUtc = (d: Date) => (marketClient.isSimulated ? d : serverToUtc(d));
+    const days = new Map<string, { hi: number; lo: number; n: number }>();
+    for (const b of bars) {
+      const t = getZonedTime(toUtc(b.timestamp), 'Asia/Kolkata');
+      if (t.minutesOfDay < FIB_SWEEP.rangeFrom || t.minutesOfDay > FIB_SWEEP.rangeTo) continue;
+      const d = days.get(t.dateKey) ?? { hi: -Infinity, lo: Infinity, n: 0 };
+      d.hi = Math.max(d.hi, b.open, b.close);
+      d.lo = Math.min(d.lo, b.open, b.close);
+      d.n++;
+      days.set(t.dateKey, d);
+    }
+    const keys = Array.from(days.keys()).sort();
+    const date = keys[keys.length - 1];
+    if (!date) return null;
+    const d = days.get(date)!;
+    const range = d.hi - d.lo;
+    if (!(range > 0)) return null;
+    const r = (v: number) => parseFloat(v.toFixed(2));
+    return { date, bodyHigh: r(d.hi), bodyLow: r(d.lo), range: r(range), upper: r(d.lo + 2 * range), lower: r(d.lo - range), candles: d.n };
   }
 
   /** Paper / simulated mode: account numbers from the journal */

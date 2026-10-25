@@ -125,6 +125,18 @@
   .live.on { color: var(--green); } .live.on i { background: var(--green); animation: pulse 1.5s ease-out infinite; }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.5); } 70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
 
+  /* fib sweep */
+  .fibgrid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 14px; }
+  .fibsteps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .fstep { background: var(--panel-2); border-radius: 9px; padding: 9px 10px; border: 1px solid transparent; }
+  .fstep .n { font-size: 11px; color: var(--muted); }
+  .fstep .t { font-weight: 600; font-size: 13px; margin-top: 2px; }
+  .fstep .d { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .fstep.done { opacity: .55; }
+  .fstep.now { border-color: rgba(231,184,76,.6); box-shadow: 0 0 22px -14px rgba(231,184,76,.9); }
+  #fibStatus { font-size: 13px; background: var(--panel-2); border-radius: 8px; padding: 8px 10px; overflow-wrap: anywhere; }
+  @media (max-width: 860px) { .fibgrid { grid-template-columns: minmax(0, 1fr); } .fibsteps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
   /* stats */
   .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
   .stat { background: var(--panel-2); border-radius: 9px; padding: 8px 10px; }
@@ -211,7 +223,7 @@
       <h2>XAUUSD chart
         <span class="r" style="display:inline-flex;gap:10px;align-items:center">
           <span class="muted num" id="chartInfo"></span>
-          <span class="tabs" id="tfTabs"><button data-tf="M15">M15</button><button data-tf="H1" class="on">H1</button><button data-tf="H4">H4</button></span>
+          <span class="tabs" id="tfTabs"><button data-tf="M5">M5</button><button data-tf="M15">M15</button><button data-tf="H1" class="on">H1</button><button data-tf="H4">H4</button></span>
         </span>
       </h2>
       <svg id="chart" viewBox="0 0 800 340" role="img" aria-label="XAUUSD candlestick chart with open trade levels"></svg>
@@ -224,6 +236,16 @@
       </div>
       <div class="kv" id="mkt"></div>
     </div>
+  </section>
+
+  <!-- Fib Sweep panel (only when fibSweep is active) -->
+  <section class="card" id="fibCard" style="margin-bottom:var(--gap);display:none">
+    <h2>Fib Sweep — today <span class="r muted" id="fibInfo"></span></h2>
+    <div class="fibgrid">
+      <div class="fibsteps" id="fibSteps"></div>
+      <div class="kv" id="fibLevels"></div>
+    </div>
+    <div class="st" id="fibStatus" style="margin-top:10px"></div>
   </section>
 
   <!-- strategies -->
@@ -323,12 +345,14 @@
   let data = null;
   let chartTf = 'H1';
   let lastBid = null;
-  try { chartTf = localStorage.getItem('chartTf') || 'H1'; } catch (e) { /* storage blocked */ }
+  let tfChosen = false;
+  try { const saved = localStorage.getItem('chartTf'); if (saved) { chartTf = saved; tfChosen = true; } } catch (e) { /* storage blocked */ }
 
   document.querySelectorAll('#tfTabs button').forEach((b) => {
     b.classList.toggle('on', b.dataset.tf === chartTf);
     b.addEventListener('click', () => {
       chartTf = b.dataset.tf;
+      tfChosen = true;
       try { localStorage.setItem('chartTf', chartTf); } catch (e) { /* ignore */ }
       document.querySelectorAll('#tfTabs button').forEach((x) => x.classList.toggle('on', x === b));
       if (data) renderChart(data);
@@ -336,6 +360,10 @@
   });
 
   function render(d) {
+    if (!d.challenge || !d.apiVersion) {
+      $('notices').innerHTML = '<div class="notice red">Server pe purana bot code chal raha hai — server pe chalao: <b>cd ~/fundednext-trading-bot &amp;&amp; npm run build &amp;&amp; pm2 restart fundednext-bot</b></div>';
+      return;
+    }
     data = d;
     tz = d.clock.timezone || tz;
     inrRate = d.fx && d.fx.usdInr ? d.fx.usdInr : null;
@@ -427,6 +455,9 @@
       ['Last scan', ago(bot.lastCycleAt)],
     ];
     $('mkt').innerHTML = kv.map(([k, v]) => '<div class="k">' + esc(k) + '</div><div class="v">' + v + '</div>').join('');
+
+    // Fib Sweep panel
+    renderFib(d);
 
     // strategies
     $('strats').innerHTML = (d.strategies || []).map((s) => {
@@ -587,13 +618,19 @@
     const tracked = new Map((d.openTrades || []).map((o) => [o.ticket, o]));
     const src = (d.account && d.account.source === 'MT5' && d.mt5Positions) ? d.mt5Positions.map((m) => ({ side: m.side, entry: m.priceOpen, sl: m.sl, tp: m.tp, name: (tracked.get(m.ticket) || {}).sleeve || '' })) :
       (d.openTrades || []).map((o) => ({ side: o.type, entry: o.entryPrice, sl: o.stopLoss, tp: o.takeProfit, name: o.sleeve || '' }));
+    const fibLines = [];
+    if (d.fib) {
+      fibLines.push({ v: d.fib.upper, c: '#e7b84c', l: 'Fib 2' }, { v: d.fib.bodyHigh, c: '#5d6b7c', l: '1' }, { v: d.fib.bodyLow, c: '#5d6b7c', l: '0' }, { v: d.fib.lower, c: '#e7b84c', l: 'Fib −1' });
+    }
     src.forEach((t) => {
       levels.push({ v: t.entry, c: '#4c8dff', l: t.side + ' ' + t.entry.toFixed(2) });
       if (t.sl) levels.push({ v: t.sl, c: '#f05252', l: 'SL ' + t.sl.toFixed(2) });
       if (t.tp) levels.push({ v: t.tp, c: '#22c55e', l: 'TP ' + t.tp.toFixed(2) });
     });
-    let lo = Math.min(...bars.map((b) => b.low), ...levels.map((l) => l.v));
-    let hi = Math.max(...bars.map((b) => b.high), ...levels.map((l) => l.v));
+    // Fib lines widen the scale only on M5/M15 (on H1/H4 they are drawn when inside the visible range)
+    const scaleFib = chartTf === 'M5' || chartTf === 'M15' ? fibLines : [];
+    let lo = Math.min(...bars.map((b) => b.low), ...levels.map((l) => l.v), ...scaleFib.map((l) => l.v));
+    let hi = Math.max(...bars.map((b) => b.high), ...levels.map((l) => l.v), ...scaleFib.map((l) => l.v));
     const padV = (hi - lo) * 0.06 || 1; lo -= padV; hi += padV;
     const L = 6, R = 62, T = 8, B = 22;
     const cw = (W - L - R) / bars.length;
@@ -621,6 +658,14 @@
       s += '<line x1="' + x(i) + '" x2="' + x(i) + '" y1="' + y(b.high) + '" y2="' + y(b.low) + '" stroke="' + c + '" stroke-width="1"/>' +
         '<rect x="' + (x(i) - bw / 2) + '" y="' + Math.min(yo, yc) + '" width="' + bw + '" height="' + Math.max(1, Math.abs(yc - yo)) + '" fill="' + c + '"/>';
     });
+    // Fib Sweep lines
+    fibLines.forEach((lv) => {
+      if (lv.v < lo || lv.v > hi) return;
+      const yy = y(lv.v);
+      const major = lv.l.startsWith('Fib');
+      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '" stroke="' + lv.c + '" stroke-width="' + (major ? 1.4 : 1) + '"' + (major ? '' : ' stroke-dasharray="2 4"') + '/>' +
+        '<text x="' + (L + 4) + '" y="' + (yy - 4) + '" fill="' + lv.c + '" font-size="10" font-family="monospace">' + esc(lv.l) + ' ' + lv.v.toFixed(2) + '</text>';
+    });
     // trade levels
     levels.forEach((lv) => {
       const yy = y(lv.v);
@@ -639,6 +684,53 @@
     const last = bars[bars.length - 1], first = bars[0];
     $('chartInfo').innerHTML = 'O ' + px(last.open) + ' H ' + px(last.high) + ' L ' + px(last.low) + ' C ' + px(last.close) +
       ' · <span class="' + cls(last.close - first.open) + '">' + ((last.close - first.open) >= 0 ? '+' : '') + (last.close - first.open).toFixed(2) + '</span>';
+  }
+
+  function renderFib(d) {
+    const card = $('fibCard');
+    const sl = (d.strategies || []).find((x) => x.strategy === 'fibSweep');
+    if (!sl) { card.style.display = 'none'; return; }
+    card.style.display = '';
+    if (!tfChosen && chartTf !== 'M5') {
+      chartTf = 'M5';
+      document.querySelectorAll('#tfTabs button').forEach((x) => x.classList.toggle('on', x.dataset.tf === 'M5'));
+    }
+    const ist = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short' }).formatToParts(new Date());
+    const g = (t) => (ist.find((p) => p.type === t) || {}).value;
+    const mins = parseInt(g('hour'), 10) * 60 + parseInt(g('minute'), 10);
+    const weekend = g('weekday') === 'Sat' || g('weekday') === 'Sun';
+    const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    const f = d.fib && d.fib.date === todayKey ? d.fib : null;
+    const newsDay = d.news && d.news.upcoming && d.news.upcoming.some((e) => /non-?farm|payroll|cpi|ppi|fomc|federal funds/i.test(e.title) &&
+      new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(e.at)) === todayKey);
+    const stage = weekend ? -1 : mins < 690 ? 0 : mins <= 755 ? 1 : mins < 870 ? 2 : mins < 1260 ? 3 : 4;
+    const steps = [
+      ['1', 'Range', '11:30–12:35 IST', 'Body high/low of 13 M5 candles'],
+      ['2', 'Lines', '12:35', 'Fib 2 = low + 2R · −1 = low − R'],
+      ['3', 'Wait', 'till 14:30', 'No trades before 14:30'],
+      ['4', 'Hunt sweeps', '14:30–21:00', 'Close beyond → wick back inside → entry'],
+    ];
+    $('fibSteps').innerHTML = steps.map((st, k) => {
+      const cls = stage === -1 ? '' : k < Math.min(stage, 3) || stage === 4 ? 'done' : (k === Math.min(stage, 3) ? 'now' : '');
+      return '<div class="fstep ' + cls + '"><div class="n">Step ' + st[0] + ' · ' + st[2] + '</div><div class="t">' + st[1] + '</div><div class="d">' + st[3] + '</div></div>';
+    }).join('');
+    const p = d.bot.pairs[0] || {};
+    const bid = typeof p.bid === 'number' ? p.bid : null;
+    const dist = (v) => (bid === null ? '' : ' <span class="dim">(' + (v - bid >= 0 ? '+' : '−') + '$' + Math.abs(v - bid).toFixed(2) + ')</span>');
+    $('fibLevels').innerHTML = f ? [
+      ['Fib 2 → SHORT line', '<b style="color:var(--gold)">' + px(f.upper) + '</b>' + dist(f.upper)],
+      ['Body high (1)', px(f.bodyHigh)],
+      ['Body low (0)', px(f.bodyLow)],
+      ['Fib −1 → LONG line', '<b style="color:var(--gold)">' + px(f.lower) + '</b>' + dist(f.lower)],
+      ['Range size', '$' + f.range.toFixed(2) + ' · ' + f.candles + ' candles'],
+      ['SL / TP rule', 'leg wick ± $2 · TP 2× risk'],
+    ].map(([k, v]) => '<div class="k">' + esc(k) + '</div><div class="v">' + v + '</div>').join('')
+      : '<div class="k">Levels</div><div class="v">' + (weekend ? 'weekend — no range' : stage === 0 ? 'range starts 11:30 IST' : stage === 1 ? 'range forming…' : 'waiting for M5 data') + '</div>';
+    const tradesToday = (d.history || []).filter((h) => h.sleeve && h.sleeve.startsWith('fibSweep') &&
+      new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(h.openedAt)) === todayKey);
+    $('fibInfo').textContent = weekend ? 'market closed' : newsDay ? '⛔ major US news day — no trades' :
+      stage === 4 ? 'done for today (no entries after 21:00)' : tradesToday.length + '/2 trades today';
+    $('fibStatus').innerHTML = '<span class="muted">Bot:</span> ' + esc(sl.status || '—') + (sl.updatedAt ? ' <span class="dim">· ' + ago(sl.updatedAt) + '</span>' : '');
   }
 
   function renderEquity(points) {
@@ -684,7 +776,12 @@
     try {
       const res = await fetch('/api/status', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      render(await res.json());
+      const json = await res.json();
+      try {
+        render(json);
+      } catch (err) {
+        $('notices').innerHTML = '<div class="notice red">Dashboard error: ' + esc(err && err.message) + ' — server pe <b>npm run build &amp;&amp; pm2 restart fundednext-bot</b> karke page refresh karo.</div>';
+      }
       lastOk = Date.now();
       setConn(true, 'Live');
     } catch (e) {

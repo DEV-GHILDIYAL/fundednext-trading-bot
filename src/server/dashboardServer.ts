@@ -257,6 +257,8 @@ function buildAdvanced(): Record<string, unknown> {
     analytics: buildAnalytics(tradeJournal.getAllClosed()),
     chart: dd.chart,
     serverOffsetMs: dd.serverOffsetMs,
+    fib: config.sleeves.some((sl) => sl.strategy === 'fibSweep') ? dd.fib : null,
+    apiVersion: 3,
     today: dd.today,
     fx: dd.fx,
     health: {
