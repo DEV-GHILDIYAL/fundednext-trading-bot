@@ -14,6 +14,7 @@ import { logger } from '../utils/logger';
 import { marketClient, CandleData } from '../api/market';
 import { mt5Bridge, BridgeAccount, BridgePosition } from '../api/mt5Bridge';
 import { newsCalendar, NewsEvent } from '../strategies/news';
+import { liveServerOffsetMs } from '../utils/time';
 import { PAIR_LIST } from '../constants/pairs';
 import { tradeJournal } from './tradeJournal';
 import { tradeMonitor } from './tradeMonitor';
@@ -111,7 +112,7 @@ export class DashboardData {
     if (!marketClient.isSimulated) {
       try {
         const q = await marketClient.getCurrentPrice(pair);
-        this.snap.serverOffsetMs = Math.round((q.timestamp.getTime() - Date.now()) / 1800000) * 1800000;
+        this.snap.serverOffsetMs = liveServerOffsetMs(q.timestamp);
       } catch {
         // keep previous
       }

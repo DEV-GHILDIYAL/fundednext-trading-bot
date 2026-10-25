@@ -108,3 +108,29 @@ export function sessionClockInDisplayZone(minutes: number, now: Date = new Date(
   }
   return formatMinutes(minutes);
 }
+
+/**
+ * MT5 broker server offset from UTC. FundedNext (like most MT5 brokers) runs on "New York close" time:
+ * UTC+3 while New York is on daylight-saving time, UTC+2 otherwise. Bar times are server time written as UTC.
+ */
+export function brokerOffsetMs(serverTime: Date): number {
+  const ny = getZonedTime(serverTime, 'America/New_York');
+  let diff = serverTime.getUTCHours() * 60 + serverTime.getUTCMinutes() - ny.minutesOfDay;
+  if (diff < 0) diff += 24 * 60;
+  return (diff === 240 ? 3 : 2) * 3600000;
+}
+
+/** Real UTC instant of an MT5 bar/tick time (server time written as UTC) */
+export function serverToUtc(serverTime: Date): Date {
+  return new Date(serverTime.getTime() - brokerOffsetMs(serverTime));
+}
+
+/**
+ * Server offset from a live tick when the tick is fresh (market open), else the NY-close rule.
+ * On weekends the last tick is from Friday, so tick − now would give nonsense like −41 h.
+ */
+export function liveServerOffsetMs(tickTime: Date, now: Date = new Date()): number {
+  const raw = Math.round((tickTime.getTime() - now.getTime()) / 1800000) * 1800000;
+  const rule = brokerOffsetMs(new Date(now.getTime() + 2 * 3600000));
+  return Math.abs(raw - rule) <= 3600000 ? raw : rule;
+}

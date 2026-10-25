@@ -12,6 +12,7 @@ import { config } from '../src/config';
 import { createMarketDataSource } from '../src/api/market';
 import { readAiReviews, aiReviewLogPath, AiReviewRecord } from '../src/services/aiReviewLog';
 import { PAIR_LIST } from '../src/constants/pairs';
+import { serverToUtc } from '../src/utils/time';
 
 function arg(name: string, fallback: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -28,8 +29,6 @@ async function main(): Promise<void> {
     return;
   }
   const market = createMarketDataSource(config.dataSource);
-  const quote = await market.getCurrentPrice(PAIR_LIST[0]);
-  const offsetMs = market.isSimulated ? 0 : Math.round((quote.timestamp.getTime() - Date.now()) / 1800000) * 1800000;
   const m5 = (await market.getCandles(PAIR_LIST[0], 'M5', 10000)).filter((c) => c.closed !== false);
 
   const replay = (r: AiReviewRecord): { outcome: Outcome; r: number } => {
@@ -37,7 +36,7 @@ async function main(): Promise<void> {
     const risk = Math.abs(r.entry - r.sl);
     const reward = Math.abs(r.tp - r.entry);
     if (!(risk > 0)) return { outcome: 'NO DATA', r: 0 };
-    const bars = m5.filter((c) => c.timestamp.getTime() - offsetMs >= from);
+    const bars = m5.filter((c) => (market.isSimulated ? c.timestamp : serverToUtc(c.timestamp)).getTime() >= from);
     if (bars.length === 0) return { outcome: 'NO DATA', r: 0 };
     for (const c of bars) {
       const hitSl = r.side === 'BUY' ? c.low <= r.sl : c.high >= r.sl;

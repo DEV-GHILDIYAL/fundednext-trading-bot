@@ -109,3 +109,20 @@ describe('fibSweep (PDF example, 8 Oct 2026)', () => {
     expect(days.get('2026-10-28')).toMatch(/FOMC/); // 14:00 ET = 23:30 IST, same date
   });
 });
+
+describe('broker server time (NY-close)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { brokerOffsetMs, serverToUtc, liveServerOffsetMs } = require('../../src/utils/time');
+  it('is UTC+3 while New York is on DST and UTC+2 otherwise', () => {
+    expect(brokerOffsetMs(new Date('2026-10-23T23:00:00Z')) / 3600000).toBe(3); // Oct: NY DST
+    expect(brokerOffsetMs(new Date('2026-11-10T12:00:00Z')) / 3600000).toBe(2); // after 1 Nov
+    expect(serverToUtc(new Date('2026-10-08T09:00:00Z')).toISOString()).toBe('2026-10-08T06:00:00.000Z');
+  });
+  it('ignores a stale weekend tick instead of producing −41 h', () => {
+    const now = new Date('2026-10-25T16:46:00Z'); // Sunday
+    const fridayTick = new Date('2026-10-23T23:59:00Z'); // server time
+    expect(liveServerOffsetMs(fridayTick, now) / 3600000).toBe(3);
+    const freshTick = new Date(now.getTime() + 3 * 3600000 + 5000);
+    expect(liveServerOffsetMs(freshTick, now) / 3600000).toBe(3);
+  });
+});

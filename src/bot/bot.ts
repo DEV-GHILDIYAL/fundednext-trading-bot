@@ -15,7 +15,7 @@ import { tradeJournal } from '../services/tradeJournal';
 import { notifier } from '../services/notifier';
 import { Calculator } from '../utils/calculator';
 import { PAIR_LIST, TradingPair, getPairSpec } from '../constants/pairs';
-import { getZonedTime, formatClock, isWithinTradingSession, isAnySleeveInSession, isWeekend } from '../utils/time';
+import { getZonedTime, formatClock, isWithinTradingSession, isAnySleeveInSession, isWeekend, liveServerOffsetMs } from '../utils/time';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -456,8 +456,7 @@ export class TradingBot {
   /** MT5 bar/tick times are broker server time written as UTC; estimate the offset from the tick */
   private serverOffsetMs(quote: PriceData): number {
     if (marketClient.isSimulated) return 0;
-    const raw = quote.timestamp.getTime() - Date.now();
-    return Math.round(raw / (30 * 60 * 1000)) * 30 * 60 * 1000;
+    return liveServerOffsetMs(quote.timestamp);
   }
 
   /** Minutes since the given closed candle closed */

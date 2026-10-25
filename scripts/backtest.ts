@@ -26,7 +26,7 @@ import { defaultStrategyParams, rangeBarsFor } from '../src/strategies/entrySign
 import { computeIndicators, Indicators, INDICATOR_WARMUP } from '../src/strategies/indicators';
 import { evaluateStrategy, isSignal, StrategyName, STRATEGY_NAMES, SUPERTREND_EA, HTF_FOR } from '../src/strategies/library';
 import { getPairSpec, PAIR_LIST } from '../src/constants/pairs';
-import { isWithinTradingSession, getZonedTime, formatMinutes } from '../src/utils/time';
+import { isWithinTradingSession, getZonedTime, formatMinutes, serverToUtc } from '../src/utils/time';
 
 interface Variant {
   strategy: StrategyName;
@@ -167,7 +167,10 @@ interface Extras {
   majorDays?: Map<string, string>;
 }
 
-function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number, extras: Extras = {}): BtTrade[] {
+/** Bar time (server) → real UTC. MT5: NY-close rule per bar (DST-correct across the whole history) */
+type ToUtc = (d: Date) => Date;
+
+function runBacktest(ds: Dataset, v: Variant, spread: number, toUtc: ToUtc, extras: Extras = {}): BtTrade[] {
   const { htfDir, daily, dailyIdx, news, majorDays } = extras;
   const filters = v.filters !== false;
   const pair = PAIR_LIST[0];
@@ -176,7 +179,6 @@ function runBacktest(ds: Dataset, v: Variant, spread: number, offsetMs: number, 
   const base = defaultStrategyParams();
   const minAtrPips = config.minAtrPips * Math.sqrt(tfMin / 60); // ATR scales ~√time
   const breakoutParams = { ...base, rangeBars: rangeBarsFor(v.timeframe, 24), usePriceAction: true, minAtrPips };
-  const toUtc = (d: Date) => new Date(d.getTime() - offsetMs);
   const c = ds.candles;
 
   const trades: BtTrade[] = [];
@@ -389,10 +391,10 @@ function runPortfolio(
   sleeves: Sleeve[],
   datasets: Map<EntryTimeframe, Dataset>,
   spread: number,
-  offsetMs: number,
+  toUtc: ToUtc,
   extrasFor: (s: StrategyName, tf: EntryTimeframe) => Extras
 ): void {
-  const toUtcMs = (d: Date) => d.getTime() - offsetMs;
+  const toUtcMs = (d: Date) => toUtc(d).getTime();
   for (const sl of sleeves) {
     const n = datasets.get(sl.timeframe)!.candles.length;
     if (n <= INDICATOR_WARMUP + 50) throw new Error(`${sl.timeframe}: only ${n} candles — need more history for ${sl.id}`);
@@ -409,8 +411,8 @@ function runPortfolio(
     const ex = extrasFor(sl.strategy, sl.timeframe);
     perSleeve.push({
       sleeve: sl,
-      on: runBacktest(ds, { ...base, filters: true }, spread, offsetMs, ex),
-      off: runBacktest(ds, { ...base, filters: false }, spread, offsetMs, ex),
+      on: runBacktest(ds, { ...base, filters: true }, spread, toUtc, ex),
+      off: runBacktest(ds, { ...base, filters: false }, spread, toUtc, ex),
     });
   }
 
@@ -551,9 +553,20 @@ async function main(): Promise<void> {
   const market: MarketDataSource = arg('source', '') === 'synth' ? syntheticMarket() : createMarketDataSource(source);
 
   const quote = await market.getCurrentPrice(pair);
-  const spread = Math.max(quote.ask - quote.bid, spec.pipSize);
-  const offsetMs = arg('source', '') === 'synth' ? 3 * 3600000 : source === 'mt5' ? Math.round((quote.timestamp.getTime() - Date.now()) / 1800000) * 1800000 : 0;
-  console.log(`Backtest ${pair} on ${source.toUpperCase()} | spread ${spread.toFixed(2)} | server offset ${(offsetMs / 3600000).toFixed(1)}h | risk $${config.riskPerTrade}/trade`);
+  const synth = arg('source', '') === 'synth';
+  const toUtc: ToUtc = synth ? (d) => new Date(d.getTime() - 3 * 3600000) : source === 'mt5' ? serverToUtc : (d) => d;
+  // weekend / closed market: the last quote is stale and its spread is far wider than normal
+  const stale = source === 'mt5' && Math.abs(Date.now() - toUtc(quote.timestamp).getTime()) > 15 * 60000;
+  const spreadArg = parseFloat(arg('spread', ''));
+  const spread = Number.isFinite(spreadArg)
+    ? spreadArg
+    : stale
+      ? 0.6
+      : Math.max(quote.ask - quote.bid, spec.pipSize);
+  console.log(
+    `Backtest ${pair} on ${source.toUpperCase()} | spread ${spread.toFixed(2)}${stale && !Number.isFinite(spreadArg) ? ' (market closed → typical; --spread X to change)' : ''} | ` +
+      `server time ${source === 'mt5' ? 'UTC+3 (NY DST) / UTC+2' : synth ? 'UTC+3' : 'UTC'} | risk $${config.riskPerTrade}/trade`
+  );
 
   const only = arg('only', '')
     .split(',')
@@ -603,7 +616,7 @@ async function main(): Promise<void> {
   };
 
   if (portfolio) {
-    runPortfolio(sleeves, datasets, spread, offsetMs, extrasFor);
+    runPortfolio(sleeves, datasets, spread, toUtc, extrasFor);
     return;
   }
 
@@ -626,7 +639,7 @@ async function main(): Promise<void> {
 
   const rows = variants.map((v) => {
     const ds = datasets.get(v.timeframe)!;
-    const trades = runBacktest(ds, v, spread, offsetMs, extrasFor(v.strategy, v.timeframe));
+    const trades = runBacktest(ds, v, spread, toUtc, extrasFor(v.strategy, v.timeframe));
     return { v, ds, trades, s: summarize(trades, ds) };
   });
 
