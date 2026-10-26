@@ -85,7 +85,9 @@ export class TradeExecutor {
 
     const risk = Math.abs(signal.entryPrice - signal.stopLoss);
     const reward = Math.abs(signal.takeProfit - signal.entryPrice);
-    Validator.validateRRRatio(reward / risk, config.profitRatio, 0.02);
+    // The strategy sets the TP; only reject nonsense (reward below 1R or above the strategy's ratio)
+    const target = signal.riskRewardRatio > 0 ? signal.riskRewardRatio : config.profitRatio;
+    Validator.validateRRRange(reward / risk, 1, target + 0.02);
   }
 
   private paperOrder(signal: TradeSignal, sizing: { lots: number; units: number; risk: number }): ExecutionResult {

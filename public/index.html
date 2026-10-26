@@ -668,7 +668,8 @@
       (d.openTrades || []).map((o) => ({ side: o.type, entry: o.entryPrice, sl: o.stopLoss, tp: o.takeProfit, name: o.sleeve || '' }));
     const fibLines = [];
     if (d.fib) {
-      fibLines.push({ v: d.fib.upper, c: '#e7b84c', l: 'Fib 2' }, { v: d.fib.bodyHigh, c: '#5d6b7c', l: '1' }, { v: d.fib.bodyLow, c: '#5d6b7c', l: '0' }, { v: d.fib.lower, c: '#e7b84c', l: 'Fib −1' });
+      const tag = d.fib.complete === false ? ' (forming)' : '';
+      fibLines.push({ v: d.fib.upper, c: '#e7b84c', l: 'Fib 2' + tag }, { v: d.fib.bodyHigh, c: '#5d6b7c', l: '1' }, { v: d.fib.bodyLow, c: '#5d6b7c', l: '0' }, { v: d.fib.lower, c: '#e7b84c', l: 'Fib −1' + tag });
     }
     src.forEach((t) => {
       levels.push({ v: t.entry, c: '#4c8dff', l: t.side + ' ' + t.entry.toFixed(2) });
@@ -711,7 +712,8 @@
       if (lv.v < lo || lv.v > hi) return;
       const yy = y(lv.v);
       const major = lv.l.startsWith('Fib');
-      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '" stroke="' + lv.c + '" stroke-width="' + (major ? 1.4 : 1) + '"' + (major ? '' : ' stroke-dasharray="2 4"') + '/>' +
+      const solid = major && !lv.l.includes('forming');
+      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '" stroke="' + lv.c + '" stroke-width="' + (major ? 1.4 : 1) + '"' + (solid ? '' : ' stroke-dasharray="' + (major ? '6 4' : '2 4') + '"') + '/>' +
         '<text x="' + (L + 4) + '" y="' + (yy - 4) + '" fill="' + lv.c + '" font-size="10" font-family="monospace">' + esc(lv.l) + ' ' + lv.v.toFixed(2) + '</text>';
     });
     // trade levels
@@ -770,7 +772,7 @@
       ['Body high (1)', px(f.bodyHigh)],
       ['Body low (0)', px(f.bodyLow)],
       ['Fib −1 → LONG line', '<b style="color:var(--gold)">' + px(f.lower) + '</b>' + dist(f.lower)],
-      ['Range size', '$' + f.range.toFixed(2) + ' · ' + f.candles + ' candles'],
+      ['Range size', '$' + f.range.toFixed(2) + ' · ' + f.candles + '/13 candles' + (f.complete === false ? ' · <b style="color:var(--amber)">forming — final at 12:35</b>' : ' · final')],
       ['SL / TP rule', 'leg wick ± $2 · TP 2× risk'],
     ].map(([k, v]) => '<div class="k">' + esc(k) + '</div><div class="v">' + v + '</div>').join('')
       : '<div class="k">Levels</div><div class="v">' + (weekend ? 'weekend — no range' : stage === 0 ? 'range starts 11:30 IST' : stage === 1 ? 'range forming…' : 'waiting for M5 data') + '</div>';

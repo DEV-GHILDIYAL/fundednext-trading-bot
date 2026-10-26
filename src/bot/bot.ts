@@ -426,6 +426,7 @@ export class TradingBot {
     if (verdict === 'rejected') {
       logAiReview({ ...record, traded: false });
       status('AI review rejected signal');
+      alerts.setupSkipped(sleeve.id, signal.signal, signal.entryPrice, `Groq: ${review.decision ?? 'SKIP'} (${review.confidence ?? '-'}) — ${review.reasoning ?? ''}`);
       return false;
     }
 
@@ -532,6 +533,7 @@ export class TradingBot {
       daily,
       newsBlock,
       newsDay,
+      fibTaken: sleeve.strategy === 'fibSweep' ? this.recentTradeTimes(sleeve.id) : undefined,
     });
     if (!isSignal(r)) return EntrySignalGenerator.skipSignal(pair, r.skip, candleTime);
     if (r.exit === 'supertrend') {
@@ -561,6 +563,20 @@ export class TradingBot {
       },
       components: { ...base.components, priceAction: { ...base.components.priceAction, pattern: sleeve.strategy, direction: dir, description: r.reason } },
     };
+  }
+
+  /** Real open times of this strategy's trades in the last 30 h (journal + open positions) */
+  private recentTradeTimes(sleeveId: string): number[] {
+    const since = Date.now() - 30 * HOUR_MS;
+    const closed = tradeJournal
+      .getAllClosed()
+      .filter((t) => t.sleeve === sleeveId)
+      .map((t) => Date.parse(t.openedAt));
+    const open = tradeMonitor
+      .getOpenTrades()
+      .filter((t) => t.sleeve === sleeveId)
+      .map((t) => t.openedAt.getTime());
+    return [...closed, ...open].filter((t) => t >= since);
   }
 
   /** Trend + recent candles for the Groq review */

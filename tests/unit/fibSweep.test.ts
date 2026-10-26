@@ -126,3 +126,24 @@ describe('broker server time (NY-close)', () => {
     expect(liveServerOffsetMs(freshTick, now) / 3600000).toBe(3);
   });
 });
+
+describe('fibSweep live: only setups that were really traded count (26 Oct bug)', () => {
+  // first SHORT setup at 20:05 (closes 20:10 IST), price then falls through its TP, then a LONG sweep forms
+  const afterTp = () => {
+    const c = [...baseDay(), ...EXAMPLE, bar(20, 10, 4130, 4131, 4109.0, 4110)];
+    c.push(bar(20, 15, 4110, 4111, 4106, 4108), bar(20, 20, 4108, 4108.5, 4100, 4101), bar(20, 25, 4101, 4107, 4099, 4106));
+    return c;
+  };
+  it('backtest (no fibTaken): the first setup counts → TP → done for the day', () => {
+    expect(why(evaluateStrategy('fibSweep', ctx(afterTp())))).toMatch(/First trade hit TP/);
+  });
+  it('live, first setup NOT traded (Groq / order rejected): the later LONG sweep is still taken', () => {
+    const r = evaluateStrategy('fibSweep', ctx(afterTp(), { fibTaken: [] }));
+    expect(isSignal(r) && r.side).toBe('BUY');
+    expect(isSignal(r) ? r.reason : '').toMatch(/trade 1\/2/);
+  });
+  it('live, first setup traded (opened 20:10:20 IST): TP → done for the day', () => {
+    const opened = istMs(20, 10) + 20000;
+    expect(why(evaluateStrategy('fibSweep', ctx(afterTp(), { fibTaken: [opened] })))).toMatch(/First trade hit TP/);
+  });
+});

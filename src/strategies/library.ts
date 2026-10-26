@@ -107,6 +107,13 @@ export interface LibContext {
    * When set, setups against the trend are ignored (SHORT only in a downtrend, LONG only in an uptrend).
    */
   fibTrend?: number[];
+  /**
+   * fibSweep, live bot: real UTC open times (ms) of the fibSweep trades actually opened recently.
+   * When given, an earlier setup in today's replay only counts as a trade if one was really opened for it
+   * (a setup skipped by Groq, the news filter or a rejected order must not use up the day's 2 trades).
+   * Omitted in the backtest, where every setup is traded.
+   */
+  fibTaken?: number[];
 }
 
 /** Filter settings from the research plan */
@@ -823,6 +830,11 @@ function fibSweep(ctx: LibContext): LibResult {
     if (!entry) continue;
 
     const isNow = j === i;
+    if (!isNow && ctx.fibTaken) {
+      const closeMs = ctx.toUtc(b.timestamp).getTime() + ctx.tfMinutes * 60000;
+      const taken = ctx.fibTaken.some((t) => t >= closeMs - 60000 && t <= closeMs + 10 * 60000);
+      if (!taken) continue; // setup was not traded (Groq / filter / rejected order) — it doesn't count
+    }
     const trend = ctx.fibTrend?.[j];
     if (trend && (entry.side === 'BUY' ? trend < 0 : trend > 0)) {
       if (isNow) return skip(`${entry.side} sweep ignored — against the ${trend > 0 ? 'up' : 'down'}trend`);

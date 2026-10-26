@@ -115,7 +115,7 @@ export const alerts = {
       void notifier.card('warn', { title: 'No trading today', rows: [['Reason', newsDay]], note: 'Fib Sweep skips NFP / CPI / PPI / FOMC days.' });
       return;
     }
-    if (!f || f.date !== today) return;
+    if (!f || f.date !== today || !f.complete) return;
     void notifier.card('info', {
       title: "Today's Fib Sweep levels",
       rows: [
@@ -142,6 +142,15 @@ export const alerts = {
         ['Phase target', phaseLine()],
         ['Trading days', `${tradeJournal.getTradingDays()} / ${config.minTradingDaysPerPhase}`],
       ],
+    });
+  },
+
+  /** A valid setup that was NOT traded (Groq rejected it) — so the user knows the bot saw it */
+  setupSkipped(sleeve: string, side: string, entry: number, reason: string): void {
+    void notifier.card('warn', {
+      title: `Setup skipped · ${side} ${strategyName(sleeve)}`,
+      rows: [['Price', entry.toFixed(2)]],
+      note: reason.slice(0, 400),
     });
   },
 

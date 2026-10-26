@@ -34,7 +34,7 @@ export interface DashboardDataSnapshot {
   /** MT5 bar times are broker server time written as UTC: subtract this to get real UTC */
   serverOffsetMs: number;
   /** Today's Fib Sweep levels (11:30–12:30 IST candle-body range) */
-  fib: { date: string; bodyHigh: number; bodyLow: number; range: number; upper: number; lower: number; candles: number } | null;
+  fib: { date: string; bodyHigh: number; bodyLow: number; range: number; upper: number; lower: number; candles: number; complete: boolean } | null;
 }
 
 const CHART_BARS: Record<ChartTf, number> = { M5: 300, M15: 160, H1: 160, H4: 120 };
@@ -174,6 +174,7 @@ export class DashboardData {
     const toUtc = (d: Date) => (marketClient.isSimulated ? d : serverToUtc(d));
     const days = new Map<string, { hi: number; lo: number; n: number }>();
     for (const b of bars) {
+      if (b.closed === false) continue; // the forming candle can still move
       const t = getZonedTime(toUtc(b.timestamp), 'Asia/Kolkata');
       if (t.minutesOfDay < FIB_SWEEP.rangeFrom || t.minutesOfDay > FIB_SWEEP.rangeTo) continue;
       const d = days.get(t.dateKey) ?? { hi: -Infinity, lo: Infinity, n: 0 };
@@ -189,7 +190,10 @@ export class DashboardData {
     const range = d.hi - d.lo;
     if (!(range > 0)) return null;
     const r = (v: number) => parseFloat(v.toFixed(2));
-    return { date, bodyHigh: r(d.hi), bodyLow: r(d.lo), range: r(range), upper: r(d.lo + 2 * range), lower: r(d.lo - range), candles: d.n };
+    // final once the 12:30 candle has closed (12:35 IST) on that day
+    const now = getZonedTime(new Date(), 'Asia/Kolkata');
+    const complete = date < now.dateKey || now.minutesOfDay >= FIB_SWEEP.rangeTo + 5;
+    return { date, bodyHigh: r(d.hi), bodyLow: r(d.lo), range: r(range), upper: r(d.lo + 2 * range), lower: r(d.lo - range), candles: d.n, complete };
   }
 
   /** Paper / simulated mode: account numbers from the journal */

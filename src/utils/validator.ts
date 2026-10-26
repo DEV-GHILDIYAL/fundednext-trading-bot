@@ -85,6 +85,18 @@ export class Validator {
     }
   }
 
+  /**
+   * Reward/risk sanity check for strategies whose TP is not exactly ratio × SL
+   * (e.g. fibSweep measures risk with a 1-point buffer, so the real ratio is ~1.6–1.9 at "1:2").
+   */
+  static validateRRRange(ratio: number, min: number, max: number): void {
+    if (!Number.isFinite(ratio) || ratio < min || ratio > max) {
+      throw new ValidationError(
+        `Risk-Reward ratio 1:${Number.isFinite(ratio) ? ratio.toFixed(2) : 'invalid'} outside the allowed 1:${min}–1:${max}`
+      );
+    }
+  }
+
   static validateTime(hour: number, minute: number): void {
     if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
       throw new ValidationError(`Invalid time: ${hour}:${minute}`);

@@ -36,3 +36,14 @@ describe('Telegram alerts', () => {
     expect(last()).toMatch(/Stop loss hit · −\$46\.36 \(-1\.00R\)/);
   });
 });
+
+describe('Validator.validateRRRange (fibSweep reward is ~1.6–1.9R at "1:2")', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { Validator } = require('../../src/utils/validator');
+  it('accepts 1:1.78 for a 1:2 strategy and rejects nonsense', () => {
+    expect(() => Validator.validateRRRange(1.78, 1, 2.02)).not.toThrow();
+    expect(() => Validator.validateRRRange(2.0, 1, 2.02)).not.toThrow();
+    expect(() => Validator.validateRRRange(0.6, 1, 2.02)).toThrow(/outside/);
+    expect(() => Validator.validateRRRange(3.5, 1, 2.02)).toThrow(/outside/);
+  });
+});
