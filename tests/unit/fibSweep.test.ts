@@ -174,3 +174,12 @@ describe('fibSweep: BUY only on a green entry candle', () => {
     expect(isSignal(r) ? r.stopLoss : 0).toBeCloseTo(4100.0 - 2, 1); // leg low from the sweep leg
   });
 });
+
+describe('fibSweep: 1 trade per day option', () => {
+  it('after the first trade hits SL, a fresh setup is not traded when fibMaxTrades = 1', () => {
+    const c = [...baseDay(), ...EXAMPLE, bar(20, 10, 4131, 4143, 4130, 4141)]; // first trade SL
+    c.push(bar(20, 15, 4141, 4141.5, 4133, 4134), bar(20, 20, 4134, 4139, 4133.5, 4138), bar(20, 25, 4138, 4138.5, 4131, 4132));
+    expect(isSignal(evaluateStrategy('fibSweep', ctx(c)))).toBe(true); // default (PDF): 2/day → second setup taken
+    expect(why(evaluateStrategy('fibSweep', ctx(c, { fibMaxTrades: 1 })))).toMatch(/done for today/);
+  });
+});

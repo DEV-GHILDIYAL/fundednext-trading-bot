@@ -72,7 +72,8 @@ function simulate(
   news: NewsIndex,
   majorDays: Map<string, string>,
   trendH1: number[],
-  filter?: number[]
+  filter?: number[],
+  rules: { colour: boolean; maxTrades: number } = { colour: true, maxTrades: 1 }
 ): Trade[] {
   const trades: Trade[] = [];
   let open: Trade | null = null;
@@ -110,6 +111,8 @@ function simulate(
       newsBlock: news.check(closeUtc),
       newsDay: day ? `Major US news day (${day})` : null,
       fibTrend: filter,
+      fibColour: rules.colour,
+      fibMaxTrades: rules.maxTrades,
     });
     if (!isSignal(r)) continue;
     open = { openedAt: closeUtc, side: r.side, entry: r.entryPrice, sl: r.stopLoss, tp: r.takeProfit, r: 0, index: i, trendH1: trendH1[i] };
@@ -178,6 +181,38 @@ function main(): void {
   const upShare = (arr: number[]) => (arr.filter((x) => x > 0).length / Math.max(1, arr.filter((x) => x !== 0).length)) * 100;
   console.log(`Time in uptrend: H1 EMA50>200 ${f(upShare(trendH1Ema), 0)}% · D1 close>EMA20 ${f(upShare(trendD1), 0)}%`);
 
+  // ── rule changes (no trend filter) ──
+  const ruleSets: [string, { colour: boolean; maxTrades: number }][] = [
+    ['A  PDF original (2/day)', { colour: false, maxTrades: 2 }],
+    ['B  + candle colour (2/day)', { colour: true, maxTrades: 2 }],
+    ['C  + colour, 1 trade/day', { colour: true, maxTrades: 1 }],
+  ];
+  const ruleRes = ruleSets.map(([name, rules]) => ({ name, trades: simulate(m5, ind, spread, news, majorDays, trendH1Ema, undefined, rules) }));
+  console.log('\n=== RULE CHANGES (same data, no trend filter) ===');
+  console.log('Variant'.padEnd(28) + 'Trd'.padStart(5) + '/wk'.padStart(5) + 'Win%'.padStart(6) + 'NetR'.padStart(7) + 'PF'.padStart(6) + 'DD R'.padStart(6) + 'LRun'.padStart(5) + '  BUY n/win%/R'.padEnd(20) + 'SELL n/win%/R'.padEnd(18) + '1st½ R'.padStart(7) + '2nd½ R'.padStart(7));
+  for (const r of ruleRes) {
+    const s = stats(r.trades, weeks, splitIdx);
+    console.log(
+      r.name.padEnd(28) + String(s.n).padStart(5) + f(s.perWeek).padStart(5) + f(s.win, 0).padStart(6) + f(s.net).padStart(7) + f(s.pf, 2).padStart(6) +
+        f(s.dd).padStart(6) + String(s.maxRun).padStart(5) + `  ${s.buy.n}/${f(s.buy.win, 0)}%/${f(s.buy.r)}`.padEnd(20) +
+        `${s.sell.n}/${f(s.sell.win, 0)}%/${f(s.sell.r)}`.padEnd(18) + f(s.h1).padStart(7) + f(s.h2).padStart(7)
+    );
+  }
+  const months0 = Array.from(new Set(m5.map((c) => serverToUtc(c.timestamp).toISOString().slice(0, 7))));
+  console.log('\n=== MONTHLY P&L — A (PDF) vs C (colour + 1/day), risk $' + config.riskPerTrade + ' per trade ===');
+  console.log('Month'.padEnd(9) + '   A trd/win%/R/$'.padEnd(28) + '   C trd/win%/R/$');
+  const cellM = (ts: Trade[], mo: string) => {
+    const x = ts.filter((t) => t.openedAt.toISOString().slice(0, 7) === mo);
+    const r = x.reduce((a, t) => a + t.r, 0);
+    return `${x.length}/${f(x.length ? (x.filter((t) => t.r > 0).length / x.length) * 100 : 0, 0)}%/${f(r)}R/${r * config.riskPerTrade >= 0 ? '+' : '−'}$${Math.abs(r * config.riskPerTrade).toFixed(0)}`;
+  };
+  for (const mo of months0) console.log(mo.padEnd(9) + `   ${cellM(ruleRes[0].trades, mo)}`.padEnd(28) + `   ${cellM(ruleRes[2].trades, mo)}`);
+  for (const r of [ruleRes[0], ruleRes[2]]) {
+    const net = r.trades.reduce((a, t) => a + t.r, 0);
+    const perMonth = net / (weeks / 4.345);
+    console.log(`  ${r.name.trim()}: average ${f(perMonth)}R/month ≈ $${(perMonth * config.riskPerTrade).toFixed(0)}/month at $${config.riskPerTrade} risk`);
+  }
+
   const variants: [string, number[] | undefined][] = [
     ['As-is (no filter)', undefined],
     ['H1 EMA50 vs EMA200', trendH1Ema],
@@ -187,7 +222,7 @@ function main(): void {
   ];
   const results = variants.map(([name, tr]) => ({ name, trades: simulate(m5, ind, spread, news, majorDays, trendH1Ema, tr) }));
 
-  console.log('\n=== VARIANTS (same rules; filter = only trade in the trend direction) ===');
+  console.log('\n=== TREND FILTERS on top of C (only trade in the trend direction) ===');
   console.log(
     'Variant'.padEnd(22) + 'Trd'.padStart(5) + '/wk'.padStart(5) + 'Win%'.padStart(6) + 'NetR'.padStart(7) + 'PF'.padStart(6) + 'DD R'.padStart(6) +
       'LRun'.padStart(5) + '  BUY n/win%/R'.padEnd(20) + 'SELL n/win%/R'.padEnd(18) + '1st½ R'.padStart(7) + '2nd½ R'.padStart(7)

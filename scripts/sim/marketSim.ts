@@ -226,6 +226,8 @@ interface Scenario {
   rejectOrder?: (call: number) => boolean;
   restartAt?: string;
   end?: string;
+  /** extra .env values for this scenario */
+  env?: Record<string, string>;
   expect: (r: SimResult) => [string, boolean][];
 }
 
@@ -284,8 +286,9 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'S2',
-    title: 'SHORT → SL, then a fresh 2nd SHORT setup → TP',
+    title: '(2/day mode) SHORT → SL, then a fresh 2nd SHORT setup → TP',
     day: WED,
+    env: { FIB_MAX_TRADES_PER_DAY: '2' },
     build: (m, d) => {
       m.sweepShort(istAt(d, '15:00'));
       toSl(m, 'SELL');
@@ -301,8 +304,9 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'S3',
-    title: 'Two stop-losses → third setup ignored',
+    title: '(2/day mode) Two stop-losses → third setup ignored',
     day: WED,
+    env: { FIB_MAX_TRADES_PER_DAY: '2' },
     build: (m, d) => {
       m.sweepShort(istAt(d, '15:00'));
       toSl(m, 'SELL');
@@ -473,6 +477,21 @@ const SCENARIOS: Scenario[] = [
       ['journal has exactly one TP close', r.journal.length === 1 && r.journal[0]?.reason === 'TAKE_PROFIT'],
     ],
   },
+  {
+    name: 'S14',
+    title: '(1/day, live default) SHORT → SL, then a fresh setup → NOT traded',
+    day: WED,
+    build: (m, d) => {
+      m.sweepShort(istAt(d, '15:00'));
+      toSl(m, 'SELL');
+      m.drift(U - 4, m.t + 20 * MIN, 0.15);
+      m.sweepShort(istAt(d, '17:00'));
+      toTp(m, 'SELL', 50);
+    },
+    expect: (r) => [
+      ['exactly 1 trade (the SL)', trades(r) === 1 && r.trades[0]?.reason === 'STOP_LOSS'],
+    ],
+  },
 ];
 
 // random market days: only invariants are checked
@@ -522,6 +541,8 @@ async function runOne(sc: Scenario): Promise<SimResult> {
     TELEGRAM_BOT_TOKEN: '',
     TELEGRAM_CHAT_ID: '',
     PHASE_START_DATE: sc.day,
+    FIB_MAX_TRADES_PER_DAY: '1',
+    ...(sc.env ?? {}),
   });
 
   /* eslint-disable @typescript-eslint/no-var-requires */
@@ -712,7 +733,8 @@ async function runOne(sc: Scenario): Promise<SimResult> {
       const t = res.trades[seenTrades++];
       const k = istDay(NOW);
       openedPerDay.set(k, (openedPerDay.get(k) ?? 0) + 1);
-      if ((openedPerDay.get(k) ?? 0) > 2) res.violations.push(`${t.openIst} more than 2 trades on ${k}`);
+      const cap = Number(process.env.FIB_MAX_TRADES_PER_DAY ?? 2);
+      if ((openedPerDay.get(k) ?? 0) > cap) res.violations.push(`${t.openIst} more than ${cap} trade(s) on ${k}`);
       if (t.openIst < '14:30' || t.openIst > '21:03') res.violations.push(`${t.openIst} entry outside 14:30–21:00 IST`);
       const risk = Math.abs(t.entry - t.sl) * t.volume * 100;
       if (risk > 46) res.violations.push(`${t.openIst} risk $${risk.toFixed(2)} > $45`);

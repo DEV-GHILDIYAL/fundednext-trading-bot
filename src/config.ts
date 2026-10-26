@@ -213,6 +213,8 @@ export const config = {
   // No new entries 15 min before → 30 min after US tier-1 news (FOMC: 60 min after)
   newsFilter: process.env.NEWS_FILTER !== 'false',
   // Positions open at the same time (1–3), SAME direction only (no hedging). MAX_TRADES_PER_DAY still caps the day.
+  // fibSweep: trades per IST day — 1 = first trade only (win or loss), 2 = PDF rule (second setup after a first SL)
+  fibMaxTradesPerDay: Math.min(Math.max(Math.floor(num(process.env.FIB_MAX_TRADES_PER_DAY, 1)), 1), 2),
   maxOpenPositions: Math.min(Math.max(Math.floor(num(process.env.MAX_OPEN_POSITIONS, 1)), 1), 3),
   // Breakout range length in hours (rolling mode)
   rangeHours: Math.max(1, num(process.env.RANGE_HOURS, 24)),

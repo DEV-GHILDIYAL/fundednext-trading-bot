@@ -534,6 +534,7 @@ export class TradingBot {
       newsBlock,
       newsDay,
       fibTaken: sleeve.strategy === 'fibSweep' ? this.recentTradeTimes(sleeve.id) : undefined,
+      fibMaxTrades: config.fibMaxTradesPerDay,
     });
     if (!isSignal(r)) return EntrySignalGenerator.skipSignal(pair, r.skip, candleTime);
     if (r.exit === 'supertrend') {

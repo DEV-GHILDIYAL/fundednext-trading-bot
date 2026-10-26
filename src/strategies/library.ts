@@ -115,6 +115,10 @@ export interface LibContext {
    * Omitted in the backtest, where every setup is traded.
    */
   fibTaken?: number[];
+  /** fibSweep: max trades per IST day (default FIB_SWEEP.maxTradesPerDay = 2, the PDF rule) */
+  fibMaxTrades?: number;
+  /** fibSweep: require a red SELL / green BUY entry candle (default true) */
+  fibColour?: boolean;
 }
 
 /** Filter settings from the research plan */
@@ -745,6 +749,8 @@ function fibSweep(ctx: LibContext): LibResult {
   if (now.minutesOfDay < F.entryFrom) return skip('Waiting for 14:30 IST');
   if (now.minutesOfDay >= F.entryUntil) return skip('After 21:00 IST — no new entries');
   if (ctx.newsDay) return skip(`${ctx.newsDay} — no trading today`);
+  const maxTrades = Math.max(1, ctx.fibMaxTrades ?? F.maxTradesPerDay);
+  const colour = ctx.fibColour !== false;
 
   // today's candles (IST date)
   let first = i;
@@ -787,7 +793,7 @@ function fibSweep(ctx: LibContext): LibResult {
       if (hitSl || hitTp) {
         trades++;
         if (!hitSl) done = 'First trade hit TP — done for today';
-        else if (trades >= F.maxTradesPerDay) done = `${F.maxTradesPerDay} trades stopped out — done for today`;
+        else if (trades >= maxTrades) done = maxTrades === 1 ? 'Trade of the day closed — done for today' : `${maxTrades} trades stopped out — done for today`;
         open = null;
         up = 'wait';
         dn = 'wait';
@@ -810,7 +816,7 @@ function fibSweep(ctx: LibContext): LibResult {
       upExt = Math.max(upExt, b.high);
     } else if (b.high > upper) {
       upExt = Math.max(upExt, b.high);
-      if (b.close < b.open) {
+      if (!colour || b.close < b.open) {
         // SELL only on a RED entry candle (Dev, 26 Oct)
         entry = { side: 'SELL', ext: upExt };
         up = 'armed';
@@ -829,7 +835,7 @@ function fibSweep(ctx: LibContext): LibResult {
         dnExt = Math.min(dnExt, b.low);
       } else if (b.low < lower) {
         dnExt = Math.min(dnExt, b.low);
-        if (b.close > b.open) {
+        if (!colour || b.close > b.open) {
           // BUY only on a GREEN entry candle (Dev, 27 Oct)
           entry = { side: 'BUY', ext: dnExt };
           dn = 'armed';
@@ -865,7 +871,7 @@ function fibSweep(ctx: LibContext): LibResult {
         takeProfit: round(ctx.pair, tp),
         reason:
           `Fib ${entry.side === 'SELL' ? '2' : '−1'} line swept (leg ${entry.side === 'SELL' ? 'high' : 'low'} ${entry.ext.toFixed(2)}) ` +
-          `and closed back inside → ${entry.side === 'SELL' ? 'SHORT' : 'LONG'}; ${lv}; trade ${trades + 1}/${F.maxTradesPerDay} today`,
+          `and closed back inside → ${entry.side === 'SELL' ? 'SHORT' : 'LONG'}; ${lv}; trade ${trades + 1}/${maxTrades} today`,
         exit: 'fixed',
       };
     }
