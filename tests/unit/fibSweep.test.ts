@@ -147,3 +147,30 @@ describe('fibSweep live: only setups that were really traded count (26 Oct bug)'
     expect(why(evaluateStrategy('fibSweep', ctx(afterTp(), { fibTaken: [opened] })))).toMatch(/First trade hit TP/);
   });
 });
+
+describe('fibSweep: SELL only on a red entry candle', () => {
+  it('a GREEN wick-back candle does not sell; the next RED one does', () => {
+    const green = bar(20, 5, 4129.0, 4140.26, 4128.5, 4130.885); // wick above, closes inside, but close > open
+    expect(why(evaluateStrategy('fibSweep', ctx([...baseDay(), ...EXAMPLE.slice(0, 3), green])))).toMatch(/sweep leg running/);
+    const red = bar(20, 10, 4131.0, 4136.0, 4127.0, 4128.0);
+    const r = evaluateStrategy('fibSweep', ctx([...baseDay(), ...EXAMPLE.slice(0, 3), green, red]));
+    expect(isSignal(r) && r.side).toBe('SELL');
+    expect(isSignal(r) ? r.stopLoss : 0).toBeCloseTo(4140.48 + 2, 1); // leg high still from the sweep leg
+  });
+});
+
+describe('fibSweep: BUY only on a green entry candle', () => {
+  // LONG setup on the −1 line (4105.12): close below, leg, then wick below + close back inside
+  const legDown = [
+    bar(19, 50, 4108.0, 4108.5, 4104.0, 4104.5), // close below the line → leg
+    bar(19, 55, 4104.5, 4105.0, 4100.0, 4101.0), // leg low 4100.00
+  ];
+  it('a RED wick-back candle does not buy; the next GREEN one does', () => {
+    const red = bar(20, 0, 4108.0, 4108.5, 4103.0, 4106.0); // wick below, closes inside, but close < open
+    expect(why(evaluateStrategy('fibSweep', ctx([...baseDay(), ...legDown, red])))).toMatch(/−1: sweep leg running/);
+    const green = bar(20, 5, 4105.5, 4109.0, 4104.0, 4108.0);
+    const r = evaluateStrategy('fibSweep', ctx([...baseDay(), ...legDown, red, green]));
+    expect(isSignal(r) && r.side).toBe('BUY');
+    expect(isSignal(r) ? r.stopLoss : 0).toBeCloseTo(4100.0 - 2, 1); // leg low from the sweep leg
+  });
+});

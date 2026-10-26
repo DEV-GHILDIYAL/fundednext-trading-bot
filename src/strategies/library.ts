@@ -34,6 +34,7 @@
  *                  candle wicks beyond and closes back inside → trade AGAINST the sweep (2 → SHORT, −1 → LONG).
  *                  SL = leg extreme ± 2, risk for TP = entry ↔ leg extreme ± 1, TP = 2 × risk. Last entry 21:00 IST.
  *                  Max 2 trades/day: first TP → done; first SL → one more setup. Skips NFP/CPI/PPI/FOMC days.
+ *                  SELL only on a red entry candle (close < open), BUY only on a green one (close > open).
  *
  * Every strategy: stop distance clamped to [slMinAtr, slMaxAtr] × ATR, TP = rewardRatio × stop.
  */
@@ -808,8 +809,12 @@ function fibSweep(ctx: LibContext): LibResult {
     } else if (b.close > upper) {
       upExt = Math.max(upExt, b.high);
     } else if (b.high > upper) {
-      entry = { side: 'SELL', ext: Math.max(upExt, b.high) };
-      up = 'armed';
+      upExt = Math.max(upExt, b.high);
+      if (b.close < b.open) {
+        // SELL only on a RED entry candle (Dev, 26 Oct)
+        entry = { side: 'SELL', ext: upExt };
+        up = 'armed';
+      } // green wick-back candle: no entry, the leg stays alive for the next candle
     } else up = 'armed';
     // Fib −1 line (lower) → LONG
     if (!entry) {
@@ -823,8 +828,12 @@ function fibSweep(ctx: LibContext): LibResult {
       } else if (b.close < lower) {
         dnExt = Math.min(dnExt, b.low);
       } else if (b.low < lower) {
-        entry = { side: 'BUY', ext: Math.min(dnExt, b.low) };
-        dn = 'armed';
+        dnExt = Math.min(dnExt, b.low);
+        if (b.close > b.open) {
+          // BUY only on a GREEN entry candle (Dev, 27 Oct)
+          entry = { side: 'BUY', ext: dnExt };
+          dn = 'armed';
+        } // red wick-back candle: no entry, the leg stays alive for the next candle
       } else dn = 'armed';
     }
     if (!entry) continue;
