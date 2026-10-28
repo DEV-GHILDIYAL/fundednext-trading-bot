@@ -3,7 +3,7 @@ import { AddressInfo } from 'net';
 import { config } from '../../src/config';
 import { handleRequest } from '../../src/server/dashboardServer';
 import { makeSessionToken, verifySessionToken, resetLoginGuard, SESSION_DAYS } from '../../src/server/auth';
-import { validateLevels } from '../../src/server/actions';
+import { validateLevels, validateManualOrder } from '../../src/server/actions';
 import { control, Control } from '../../src/services/control';
 
 const cfg = config as unknown as { dashboardUser: string; dashboardPassword: string };
@@ -36,6 +36,29 @@ describe('validateLevels', () => {
     expect(validateLevels('SELL', 4000.2, 3970, 4000, 4000.4)).toMatch(/above/);
     expect(validateLevels('SELL', 40100, 3970, 4000, 4000.4)).toMatch(/typo/);
     expect(validateLevels('SELL', NaN, 3970, 4000, 4000.4)).toMatch(/positive/);
+  });
+});
+
+describe('validateManualOrder', () => {
+  const q = { bid: 4000, ask: 4000.4 };
+  const room = { daily: 300, total: 600 };
+  it('accepts a sane order', () => {
+    expect(validateManualOrder({ side: 'BUY', lots: 0.05, sl: 3990, tp: 4020 }, q, [], room)).toBeNull();
+  });
+  it('rejects bad side, lots, levels', () => {
+    expect(validateManualOrder({ side: 'HOLD', lots: 0.05, sl: 3990, tp: 4020 }, q, [], room)).toMatch(/side/);
+    expect(validateManualOrder({ side: 'BUY', lots: 0, sl: 3990, tp: 4020 }, q, [], room)).toMatch(/Lots/);
+    expect(validateManualOrder({ side: 'BUY', lots: 5, sl: 3990, tp: 4020 }, q, [], room)).toMatch(/Lots/);
+    expect(validateManualOrder({ side: 'BUY', lots: 0.055, sl: 3990, tp: 4020 }, q, [], room)).toMatch(/steps/);
+    expect(validateManualOrder({ side: 'SELL', lots: 0.05, sl: 3990, tp: 4020 }, q, [], room)).toMatch(/SELL/);
+  });
+  it('no hedging against any open position (bot or manual)', () => {
+    expect(validateManualOrder({ side: 'BUY', lots: 0.05, sl: 3990, tp: 4020 }, q, ['SELL'], room)).toMatch(/hedging/);
+    expect(validateManualOrder({ side: 'BUY', lots: 0.05, sl: 3990, tp: 4020 }, q, ['BUY'], room)).toBeNull();
+  });
+  it('blocks a risk that would break the loss limits', () => {
+    // 0.5 lot × $10.40 × 100 = $520 > $300 room today
+    expect(validateManualOrder({ side: 'BUY', lots: 0.5, sl: 3990, tp: 4020 }, q, [], room)).toMatch(/loss limit/);
   });
 });
 

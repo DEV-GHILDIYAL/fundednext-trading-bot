@@ -199,6 +199,31 @@
   .btn.ok { background: var(--green); color: #04130a; border-color: transparent; }
   .btn:disabled { opacity: .55; cursor: wait; }
 
+  /* manual trade */
+  .manual h2 .r { color: var(--dim); }
+  .mt-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+  .seg button { font: 700 15px system-ui, sans-serif; padding: 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; display: grid; gap: 2px; }
+  .seg button small { font: 500 12px var(--mono); }
+  .seg button.buy.on { background: var(--green-bg); color: var(--green); border-color: rgba(34,197,94,.5); }
+  .seg button.sell.on { background: var(--red-bg); color: var(--red); border-color: rgba(240,82,82,.55); }
+  .mt-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  .mt-fields label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .mt-fields input { width: 100%; font: 600 15px var(--mono); color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 10px; outline: none; }
+  .mt-fields input:focus { border-color: var(--gold); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+  .chips span { font-size: 12px; color: var(--muted); margin-right: 2px; }
+  .chips button { font: 600 12px var(--mono); padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; }
+  .chips button:hover { color: var(--text); }
+  .mt-sum { background: var(--panel-2); border-radius: 10px; padding: 12px; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; align-content: start; }
+  .mt-sum .v { text-align: right; font-family: var(--mono); }
+  .mt-go { width: 100%; margin-top: 12px; padding: 12px; font-size: 15px; justify-content: center; }
+  .mt-msg { margin-top: 8px; font-size: 13px; color: var(--red); min-height: 18px; }
+  .mt-off { color: var(--muted); font-size: 13px; }
+  .tag.manual { color: var(--blue); background: var(--blue-bg); }
+  @media (max-width: 860px) { .mt-grid { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 520px) { .mt-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+
   /* modal + toast */
   .modal { position: fixed; inset: 0; background: rgba(3,6,10,.72); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
   .modal.on { display: flex; }
@@ -252,7 +277,8 @@
     #posTable td.opt { display: flex; }
     #posTable td.act { justify-content: flex-end; padding-top: 8px; }
     #posTable td.act::before { content: none; }
-    #posTable td.act .btn { width: 100%; justify-content: center; padding: 9px; }
+    #posTable td.act { gap: 8px; }
+    #posTable td.act .btn { flex: 1; justify-content: center; padding: 9px; }
     #posTable td.empty { justify-content: center; }
     #posTable td.empty::before { content: none; }
   }
@@ -288,6 +314,36 @@
     <button class="switch" id="ctlSwitch" type="button" role="switch" aria-checked="false" aria-label="Auto trading on/off">
       <span class="track"><span class="knob"></span></span><span id="ctlLabel">—</span>
     </button>
+  </section>
+
+  <!-- manual trade -->
+  <section class="card manual" id="manualCard" style="margin-bottom:var(--gap)">
+    <h2>Manual trade <span class="r">your own trade — the bot keeps trading independently</span></h2>
+    <div id="mtBody">
+      <div class="mt-grid">
+        <div>
+          <div class="seg">
+            <button type="button" class="buy" data-side="BUY">BUY<small id="mtAsk">—</small></button>
+            <button type="button" class="sell" data-side="SELL">SELL<small id="mtBid">—</small></button>
+          </div>
+          <div class="mt-fields">
+            <label>Lots<input id="mtLots" type="number" step="0.01" min="0.01" value="0.01" inputmode="decimal"></label>
+            <label>Risk $<input id="mtRisk" type="number" step="1" min="1" inputmode="decimal" placeholder="45"></label>
+            <label>Stop loss<input id="mtSl" type="number" step="0.01" inputmode="decimal"></label>
+            <label>Take profit<input id="mtTp" type="number" step="0.01" inputmode="decimal"></label>
+          </div>
+          <div class="chips"><span>SL</span><button type="button" data-sld="5">$5</button><button type="button" data-sld="8">$8</button><button type="button" data-sld="10">$10</button><button type="button" data-sld="15">$15</button>
+            <span style="margin-left:8px">TP</span><button type="button" data-rr="1">1:1</button><button type="button" data-rr="1.5">1:1.5</button><button type="button" data-rr="2">1:2</button><button type="button" data-rr="3">1:3</button>
+            <span style="margin-left:8px">Risk</span><button type="button" data-risk="45">$45</button></div>
+        </div>
+        <div>
+          <div class="mt-sum" id="mtSum"></div>
+          <button type="button" class="btn primary mt-go" id="mtGo" disabled>Choose BUY or SELL</button>
+          <div class="mt-msg" id="mtMsg"></div>
+        </div>
+      </div>
+    </div>
+    <div class="mt-off" id="mtOff" style="display:none"></div>
   </section>
 
   <div class="notices" id="notices"></div>
@@ -432,6 +488,15 @@
   </div>
 </div>
 
+<div class="modal" id="cfmModal" role="dialog" aria-modal="true" aria-labelledby="cfmTitle">
+  <div class="dlg">
+    <h3 id="cfmTitle"></h3>
+    <div class="sub" id="cfmText"></div>
+    <div class="preview" id="cfmRows"></div>
+    <div class="acts"><button class="btn" type="button" id="cfmCancel">Cancel</button><button class="btn" type="button" id="cfmOk">Confirm</button></div>
+  </div>
+</div>
+
 <div class="modal" id="ctlModal" role="dialog" aria-modal="true" aria-labelledby="ctlTitle">
   <div class="dlg">
     <h3 id="ctlTitle">Turn trading off?</h3>
@@ -523,6 +588,7 @@
 
     // notices
     renderControl(d);
+    renderManual(d);
     const notes = [];
     if (d.control && !d.control.tradingEnabled) notes.push(['⏸️ Auto trading is OFF — the bot will not open new trades until you switch it ON. Open trades keep their SL/TP.', 'red']);
     if (d.dataSource === 'SIMULATED') notes.push(['Simulated prices — paper trades only, not real performance.', '']);
@@ -627,7 +693,7 @@
     const rows = (acc && acc.source === 'MT5' && d.mt5Positions)
       ? d.mt5Positions.map((m) => {
           const o = tracked.get(m.ticket) || {};
-          return { sleeve: o.sleeve || (m.byBot ? 'bot' : 'manual'), side: m.side, lots: m.volume, entry: m.priceOpen, now: m.priceCurrent, sl: m.sl, tp: m.tp, pnl: m.profit + (m.swap || 0), risk: o.riskAmount, opened: o.openedAt || m.time, ticket: m.ticket };
+          return { manual: !m.byBot, sleeve: o.sleeve || (m.byBot ? 'bot' : 'manual'), side: m.side, lots: m.volume, entry: m.priceOpen, now: m.priceCurrent, sl: m.sl, tp: m.tp, pnl: m.profit + (m.swap || 0), risk: o.riskAmount, opened: o.openedAt || m.time, ticket: m.ticket };
         })
       : (d.openTrades || []).map((o) => ({ sleeve: o.sleeve || 'bot', side: o.type, lots: o.lots, entry: o.entryPrice, now: o.currentPrice, sl: o.stopLoss, tp: o.takeProfit, pnl: o.pnl, risk: o.riskAmount, opened: o.openedAt, ticket: o.ticket || o.tradeId }));
     posRows.clear();
@@ -636,7 +702,7 @@
     $('open').innerHTML = rows.length ? rows.map((r) => {
       const toSl = r.sl ? Math.abs(r.now - r.sl) : null, toTp = r.tp ? Math.abs(r.tp - r.now) : null;
       posRows.set(String(r.ticket), r);
-      return '<tr><td data-l="Strategy"><span class="tag">' + esc(r.sleeve) + '</span></td>' +
+      return '<tr><td data-l="Strategy"><span class="tag' + (r.manual ? ' manual' : '') + '">' + esc(r.manual ? '🖐️ manual' : r.sleeve) + '</span></td>' +
         '<td data-l="Side"><span class="side ' + esc(r.side) + '">' + esc(r.side) + '</span></td>' +
         '<td data-l="Lots" class="r num">' + Number(r.lots || 0).toFixed(2) + '</td>' +
         '<td data-l="Entry" class="r num">' + px(r.entry) + '</td><td data-l="Now" class="r num">' + px(r.now) + '</td>' +
@@ -645,7 +711,8 @@
         '<td data-l="P&amp;L" class="r num ' + cls(r.pnl) + '">' + money(r.pnl) + '</td>' +
         '<td data-l="R" class="r num ' + cls(r.pnl) + '">' + (r.risk ? fmtR(r.pnl / r.risk) : '—') + '</td>' +
         '<td data-l="Opened" class="r num opt">' + fmtDT(r.opened) + '</td><td data-l="Ticket" class="num opt dim">' + esc(r.ticket) + '</td>' +
-        '<td class="act r"><button class="btn sm" data-edit="' + esc(r.ticket) + '">✏️ SL / TP</button></td></tr>';
+        '<td class="act r"><button class="btn sm" data-edit="' + esc(r.ticket) + '">✏️ SL / TP</button>' +
+        (d.manualTrading && d.manualTrading.enabled ? ' <button class="btn sm" data-close="' + esc(r.ticket) + '">✕ Close</button>' : '') + '</td></tr>';
     }).join('') : '<tr><td colspan="14" class="empty">No open positions</td></tr>';
 
     // account
@@ -1038,6 +1105,136 @@
       closeModal('ctlModal');
       toast(on ? 'Auto trading is ON' : 'Auto trading is OFF', 'ok');
     } catch (e) { toast(e.message, 'bad'); } finally { $('ctlConfirm').disabled = false; }
+  });
+
+  // generic confirm dialog
+  let cfmResolve = null;
+  function confirmBox(title, text, rows, okText, okClass) {
+    $('cfmTitle').textContent = title; $('cfmText').textContent = text;
+    $('cfmRows').innerHTML = (rows || []).map(([k, v]) => '<span class="muted">' + esc(k) + '</span><span class="v">' + v + '</span>').join('');
+    $('cfmRows').style.display = rows && rows.length ? '' : 'none';
+    $('cfmOk').textContent = okText; $('cfmOk').className = 'btn ' + (okClass || 'primary');
+    openModal('cfmModal');
+    return new Promise((r) => { cfmResolve = r; });
+  }
+  function cfmDone(v) { closeModal('cfmModal'); if (cfmResolve) { cfmResolve(v); cfmResolve = null; } }
+  $('cfmOk').addEventListener('click', () => cfmDone(true));
+  $('cfmCancel').addEventListener('click', () => cfmDone(false));
+  $('cfmModal').addEventListener('click', (e) => { if (e.target === $('cfmModal')) cfmDone(false); });
+
+  // manual trade
+  let mtSide = null;
+  const quote = () => { const p = (data && data.bot && data.bot.pairs && data.bot.pairs[0]) || {}; return { bid: p.bid, ask: p.ask }; };
+  const num = (id) => parseFloat($(id).value);
+  function renderManual(d) {
+    const mt = d.manualTrading || {};
+    $('mtBody').style.display = mt.enabled ? '' : 'none';
+    $('mtOff').style.display = mt.enabled ? 'none' : '';
+    $('mtOff').textContent = 'Manual trading works only with the live MT5 connection (DRY_RUN=false, DATA_SOURCE=mt5).';
+    const q = quote();
+    $('mtAsk').textContent = px(q.ask); $('mtBid').textContent = px(q.bid);
+    mtUpdate();
+  }
+  function mtCalc() {
+    const q = quote();
+    const entry = mtSide === 'BUY' ? q.ask : mtSide === 'SELL' ? q.bid : null;
+    const lots = num('mtLots'), sl = num('mtSl'), tp = num('mtTp');
+    const dist = entry && isFinite(sl) ? Math.abs(entry - sl) : NaN;
+    const risk = isFinite(dist) && isFinite(lots) ? dist * lots * contract : NaN;
+    const reward = entry && isFinite(tp) && isFinite(lots) ? Math.abs(tp - entry) * lots * contract : NaN;
+    return { q, entry, lots, sl, tp, dist, risk, reward };
+  }
+  function mtError(c) {
+    const mt = (data && data.manualTrading) || {};
+    if (!mtSide) return 'Choose BUY or SELL';
+    if (typeof c.entry !== 'number') return 'Waiting for price…';
+    if (!isFinite(c.lots) || c.lots < 0.01 || c.lots > (mt.maxLots || 1)) return 'Lots 0.01 – ' + (mt.maxLots || 1);
+    if (!isFinite(c.sl) || !isFinite(c.tp)) return 'Set stop loss and take profit';
+    if (mtSide === 'BUY' && !(c.sl < c.q.bid)) return 'BUY: SL must be below ' + px(c.q.bid);
+    if (mtSide === 'BUY' && !(c.tp > c.q.ask)) return 'BUY: TP must be above ' + px(c.q.ask);
+    if (mtSide === 'SELL' && !(c.sl > c.q.ask)) return 'SELL: SL must be above ' + px(c.q.ask);
+    if (mtSide === 'SELL' && !(c.tp < c.q.bid)) return 'SELL: TP must be below ' + px(c.q.bid);
+    const opp = mtSide === 'BUY' ? 'SELL' : 'BUY';
+    if ((data.mt5Positions || []).some((p) => p.side === opp)) return 'A ' + opp + ' position is open — no hedging';
+    if (mt.room && c.risk >= mt.room.daily) return 'Risk breaks today\'s loss limit (room ' + usd(mt.room.daily) + ')';
+    return null;
+  }
+  function mtUpdate() {
+    if (!data) return;
+    const c = mtCalc();
+    const mt = data.manualTrading || {};
+    document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.side === mtSide));
+    $('mtSum').innerHTML =
+      '<span class="muted">Entry (market)</span><span class="v">' + (c.entry ? px(c.entry) : '—') + '</span>' +
+      '<span class="muted">SL distance</span><span class="v">' + (isFinite(c.dist) ? '$' + c.dist.toFixed(2) : '—') + '</span>' +
+      '<span class="muted">If SL hits</span><span class="v neg">' + (isFinite(c.risk) ? money(-c.risk) : '—') + '</span>' +
+      '<span class="muted">If TP hits</span><span class="v pos">' + (isFinite(c.reward) ? money(c.reward) : '—') + '</span>' +
+      '<span class="muted">Risk : reward</span><span class="v">' + (c.risk > 0 && c.reward > 0 ? '1 : ' + (c.reward / c.risk).toFixed(2) : '—') + '</span>' +
+      '<span class="muted">Loss room today</span><span class="v">' + (mt.room ? usd(mt.room.daily) : '—') + '</span>';
+    const err = mtError(c);
+    const go = $('mtGo');
+    go.disabled = !!err;
+    go.className = 'btn mt-go ' + (mtSide === 'BUY' ? 'ok' : mtSide === 'SELL' ? 'danger' : 'primary');
+    go.textContent = err && !mtSide ? 'Choose BUY or SELL' : (mtSide || '') + ' ' + (isFinite(c.lots) ? c.lots.toFixed(2) : '') + ' lot @ market';
+    $('mtMsg').textContent = mtSide && err ? err : '';
+  }
+  function lotsFromRisk() {
+    const c = mtCalc(), r = num('mtRisk');
+    if (isFinite(r) && r > 0 && c.dist > 0) $('mtLots').value = Math.max(0.01, Math.floor((r / (c.dist * contract)) * 100) / 100).toFixed(2);
+  }
+  document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => {
+    const was = mtSide; mtSide = b.dataset.side;
+    if (was !== mtSide) { $('mtSl').value = ''; $('mtTp').value = ''; }
+    mtUpdate();
+  }));
+  ['mtLots', 'mtSl', 'mtTp'].forEach((id) => $(id).addEventListener('input', () => { if (id !== 'mtLots') lotsFromRisk(); mtUpdate(); }));
+  $('mtRisk').addEventListener('input', () => { lotsFromRisk(); mtUpdate(); });
+  document.querySelectorAll('[data-sld]').forEach((b) => b.addEventListener('click', () => {
+    const c = mtCalc(); if (!c.entry) return;
+    const d = Number(b.dataset.sld);
+    $('mtSl').value = (mtSide === 'BUY' ? c.entry - d : c.entry + d).toFixed(2);
+    if (!isFinite(num('mtTp'))) $('mtTp').value = (mtSide === 'BUY' ? c.entry + 2 * d : c.entry - 2 * d).toFixed(2);
+    lotsFromRisk(); mtUpdate();
+  }));
+  document.querySelectorAll('[data-rr]').forEach((b) => b.addEventListener('click', () => {
+    const c = mtCalc(); if (!c.entry || !isFinite(c.dist)) return;
+    const d = c.dist * Number(b.dataset.rr);
+    $('mtTp').value = (mtSide === 'BUY' ? c.entry + d : c.entry - d).toFixed(2); mtUpdate();
+  }));
+  document.querySelector('[data-risk]').addEventListener('click', (e) => { $('mtRisk').value = e.target.dataset.risk; lotsFromRisk(); mtUpdate(); });
+  $('mtGo').addEventListener('click', async () => {
+    const c = mtCalc(); const err = mtError(c);
+    if (err) { $('mtMsg').textContent = err; return; }
+    const ok = await confirmBox('Place manual ' + mtSide + '?', 'Real order on MT5 at market price. The bot does not manage this trade — only its SL/TP closes it (or you).', [
+      ['Side / size', mtSide + ' ' + c.lots.toFixed(2) + ' lot'], ['Entry ≈', px(c.entry)], ['Stop loss', px(c.sl)], ['Take profit', px(c.tp)],
+      ['If SL hits', '<span class="neg">' + money(-c.risk) + '</span>'], ['If TP hits', '<span class="pos">' + money(c.reward) + '</span>'],
+    ], 'Place ' + mtSide, mtSide === 'BUY' ? 'ok' : 'danger');
+    if (!ok) return;
+    $('mtGo').disabled = true; $('mtGo').textContent = 'Placing…';
+    try {
+      const j = await post('/api/orders', { side: mtSide, lots: c.lots, sl: c.sl, tp: c.tp });
+      toast('Manual ' + j.side + ' ' + j.lots.toFixed(2) + ' @ ' + px(j.price) + ' placed ✓', 'ok');
+      mtSide = null; $('mtSl').value = ''; $('mtTp').value = '';
+      setTimeout(tick, 300);
+    } catch (e) { $('mtMsg').textContent = e.message; toast(e.message, 'bad'); } finally { mtUpdate(); }
+  });
+
+  // close position
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-close]');
+    if (!b) return;
+    const r = posRows.get(b.dataset.close);
+    if (!r) return;
+    const ok = await confirmBox('Close ' + r.side + ' #' + r.ticket + ' now?', r.manual ? 'Closes your manual trade at market price.' : 'This is a BOT trade — closing it by hand ends it before its SL/TP. The bot records the result.', [
+      ['Size', Number(r.lots || 0).toFixed(2) + ' lot'], ['Entry → now', px(r.entry) + ' → ' + px(r.now)], ['P&L now', '<span class="' + cls(r.pnl) + '">' + money(r.pnl) + '</span>'],
+    ], 'Close at market', 'danger');
+    if (!ok) return;
+    b.disabled = true;
+    try {
+      const j = await post('/api/positions/close', { ticket: r.ticket });
+      toast('Closed #' + j.ticket + ' · ' + money(j.profit), 'ok');
+      setTimeout(tick, 300);
+    } catch (err) { toast(err.message, 'bad'); b.disabled = false; }
   });
 
   // SL / TP editor

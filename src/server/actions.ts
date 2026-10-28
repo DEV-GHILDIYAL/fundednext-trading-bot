@@ -1,7 +1,14 @@
 /**
- * Dashboard actions: trading ON/OFF and manual SL/TP changes.
+ * Dashboard actions: trading ON/OFF, manual SL/TP changes, manual BUY/SELL and close.
+ *
+ * Manual trades use their own magic number (MT5_MAGIC + 1), so the bot never adopts, counts or
+ * journals them — the bot keeps trading its strategy independently. Two shared rules still apply:
+ * no hedging (opposite directions at the same time) and the FundedNext loss limits.
  */
+import { config } from '../config';
 import { logger } from '../utils/logger';
+import { serverToUtc } from '../utils/time';
+import { dashboardData } from '../services/dashboardData';
 import { control, ControlState } from '../services/control';
 import { alerts } from '../services/alerts';
 import { tradeMonitor } from '../services/tradeMonitor';
@@ -87,4 +94,96 @@ export async function modifyLevels(body: { ticket?: unknown; sl?: unknown; tp?: 
   const risk = round2((trade.type === 'BUY' ? trade.entryPrice - sl : sl - trade.entryPrice) * trade.quantity);
   alerts.levelsChanged({ ticket: trade.ticket ?? 0, side: trade.type, entry: trade.entryPrice, oldSl: old.sl, oldTp: old.tp, sl, tp, risk });
   return { ticket: trade.ticket ?? trade.tradeId, sl, tp, risk };
+}
+
+export const MANUAL_MAGIC = config.mt5Magic + 1;
+export const MANUAL_MAX_LOTS = 1;
+const SYMBOL = 'XAUUSD';
+
+function requireLive(): void {
+  if (tradeExecutor.isDryRun || marketClient.isSimulated) throw new ActionError('Manual trading needs the live MT5 connection (DRY_RUN=false, DATA_SOURCE=mt5)');
+}
+
+/** Loss room left today and overall, from live MT5 equity */
+export function lossRoom(): { daily: number; total: number } | null {
+  const snap = dashboardData.snapshot;
+  const acc = snap.account;
+  if (!acc) return null;
+  const dayStart = snap.dayStart?.balance ?? acc.balance;
+  return {
+    daily: round2(acc.equity - (dayStart - config.maxDailyLoss)),
+    total: round2(acc.equity - (config.accountBalance - config.maxTotalLoss)),
+  };
+}
+
+/** Pure checks for a manual order. Returns an error message or null. */
+export function validateManualOrder(
+  o: { side: unknown; lots: number; sl: number; tp: number },
+  q: { bid: number; ask: number },
+  openSides: ('BUY' | 'SELL')[],
+  room: { daily: number; total: number } | null,
+  contract = 100
+): string | null {
+  if (o.side !== 'BUY' && o.side !== 'SELL') return 'side must be BUY or SELL';
+  if (!Number.isFinite(o.lots) || o.lots < 0.01 || o.lots > MANUAL_MAX_LOTS) return `Lots must be 0.01 – ${MANUAL_MAX_LOTS}`;
+  if (Math.abs(o.lots * 100 - Math.round(o.lots * 100)) > 1e-6) return 'Lots in steps of 0.01';
+  const lv = validateLevels(o.side, o.sl, o.tp, q.bid, q.ask);
+  if (lv) return lv;
+  const opposite = o.side === 'BUY' ? 'SELL' : 'BUY';
+  if (openSides.includes(opposite)) return `A ${opposite} position is open — opposite trades at the same time (hedging) are not allowed`;
+  const entry = o.side === 'BUY' ? q.ask : q.bid;
+  const risk = Math.abs(entry - o.sl) * o.lots * contract;
+  if (room) {
+    if (risk >= room.daily) return `Risk $${risk.toFixed(2)} would break today's loss limit (room $${room.daily.toFixed(2)})`;
+    if (risk >= room.total) return `Risk $${risk.toFixed(2)} would break the max loss limit (room $${room.total.toFixed(2)})`;
+  }
+  return null;
+}
+
+export async function placeManualOrder(body: { side?: unknown; lots?: unknown; sl?: unknown; tp?: unknown }): Promise<{ ticket: number; side: string; lots: number; price: number; sl: number; tp: number; risk: number }> {
+  requireLive();
+  const side = body.side;
+  const lots = round2(Number(body.lots));
+  const sl = round2(Number(body.sl));
+  const tp = round2(Number(body.tp));
+  const q = await marketClient.getCurrentPrice(SYMBOL);
+  const positions = await mt5Bridge.positions();
+  const err = validateManualOrder({ side, lots, sl, tp }, q, positions.map((p) => p.side), lossRoom(), getPairSpec(SYMBOL).contractSize);
+  if (err) throw new ActionError(err);
+  const s = side as 'BUY' | 'SELL';
+  let res;
+  try {
+    res = await mt5Bridge.order({ symbol: SYMBOL, side: s, volume: lots, sl, tp, magic: MANUAL_MAGIC, comment: 'manual' });
+  } catch (error) {
+    throw new ActionError((error as Error).message.replace(/^MT5 bridge POST \/order failed: /, 'MT5: '), 502);
+  }
+  const price = res.price || (s === 'BUY' ? q.ask : q.bid);
+  const ticket = res.ticket ?? res.order;
+  const risk = round2(Math.abs(price - sl) * lots * getPairSpec(SYMBOL).contractSize);
+  logger.info(`🖐️ Manual ${s} ${lots} ${SYMBOL} @ ${price} SL ${sl} TP ${tp} (ticket ${ticket}, dashboard)`);
+  alerts.manualOpened({ ticket, side: s, lots, price, sl, tp, risk });
+  return { ticket, side: s, lots, price, sl, tp, risk };
+}
+
+export async function closePosition(body: { ticket?: unknown }): Promise<{ ticket: number; profit: number }> {
+  requireLive();
+  const ticket = Number(body.ticket);
+  if (!Number.isInteger(ticket) || ticket <= 0) throw new ActionError('ticket must be a number');
+  const pos = (await mt5Bridge.positions()).find((p) => p.ticket === ticket);
+  if (!pos) throw new ActionError(`Position ${ticket} is not open any more`, 404);
+  const ageSec = (Date.now() - serverToUtc(new Date(pos.time)).getTime()) / 1000;
+  if (Number.isFinite(ageSec) && ageSec < config.minTradeDurationSeconds) {
+    throw new ActionError(`FundedNext rule: keep a trade at least ${config.minTradeDurationSeconds}s — wait ${Math.ceil(config.minTradeDurationSeconds - ageSec)}s more`);
+  }
+  try {
+    await mt5Bridge.close(ticket);
+  } catch (error) {
+    throw new ActionError((error as Error).message.replace(/^MT5 bridge POST \/close failed: /, 'MT5: '), 502);
+  }
+  const profit = round2(pos.profit + (pos.swap || 0));
+  const byBot = pos.magic === config.mt5Magic;
+  logger.info(`🖐️ Position ${ticket} closed from the dashboard (${byBot ? 'bot' : 'manual'} trade, ~$${profit})`);
+  // bot trades: the bot's own sync records the close in the journal from MT5 history
+  if (!byBot) alerts.manualClosed({ ticket, side: pos.side, lots: pos.volume, entry: pos.priceOpen, exit: pos.priceCurrent, profit });
+  return { ticket, profit };
 }

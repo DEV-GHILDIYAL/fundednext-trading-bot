@@ -177,6 +177,33 @@ export const alerts = {
     });
   },
 
+  manualOpened(p: { ticket: number; side: string; lots: number; price: number; sl: number; tp: number; risk: number }): void {
+    const reward = Math.abs(p.tp - p.price) * p.lots * 100;
+    void notifier.card('info', {
+      title: `🖐️ Manual ${p.side === 'BUY' ? 'BUY' : 'SELL'} opened`,
+      rows: [
+        ['Entry', p.price.toFixed(2)],
+        ['Stop loss', `${p.sl.toFixed(2)} (${Math.abs(p.price - p.sl).toFixed(2)} away)`],
+        ['Take profit', `${p.tp.toFixed(2)} (${Math.abs(p.tp - p.price).toFixed(2)} away)`],
+        ['Size', `${p.lots.toFixed(2)} lot`],
+        ['Risk → reward', `${usd(p.risk)} → ${usd(reward)}`],
+        ['Ticket', p.ticket],
+      ],
+      note: 'Placed from the dashboard — not a bot trade.',
+    });
+  },
+
+  manualClosed(p: { ticket: number; side: string; lots: number; entry: number; exit: number; profit: number }): void {
+    void notifier.card(p.profit >= 0 ? 'success' : 'warn', {
+      title: `🖐️ Manual ${p.side} closed · ${usd(p.profit, true)}`,
+      rows: [
+        ['Entry → exit', `${p.entry.toFixed(2)} → ${p.exit.toFixed(2)}`],
+        ['Size', `${p.lots.toFixed(2)} lot`],
+        ['Ticket', p.ticket],
+      ],
+    });
+  },
+
   feedDown(minutes: number, error: string): void {
     void notifier.card('error', { title: 'MT5 connection lost', rows: [['Down for', `${minutes} min`], ['Since', ist(new Date(Date.now() - minutes * 60000))]], note: error }, 'feed-down', 30 * 60000);
   },

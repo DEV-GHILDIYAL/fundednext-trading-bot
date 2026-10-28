@@ -8,6 +8,7 @@ import { computeIndicators, INDICATOR_WARMUP } from '../strategies/indicators';
 import { evaluateStrategy, isSignal, HTF_FOR } from '../strategies/library';
 import { newsCalendar } from '../strategies/news';
 import { control } from '../services/control';
+import { dashboardData } from '../services/dashboardData';
 import { logAiReview } from '../services/aiReviewLog';
 import { tradeExecutor } from '../services/tradeExecutor';
 import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
@@ -302,14 +303,19 @@ export class TradingBot {
     }
 
     const openTrades = tradeMonitor.getOpenTrades();
+    // manual trades (placed from the dashboard): not counted as bot positions, but no hedging
+    // against them, and their floating loss counts toward the loss-limit check below
+    const manual = dashboardData.snapshot.positions.filter((p) => p.magic !== config.mt5Magic && !openTrades.some((t) => t.ticket === p.ticket));
+    const manualFloating = manual.reduce((s, p) => s + p.profit + (p.swap || 0), 0);
     if (openTrades.length >= config.maxOpenPositions) {
       this.updatePair(pair, { status: `${openTrades.length} position(s) open (max ${config.maxOpenPositions})` });
       return;
     }
     // Worst case if every open stop AND one more trade lose: must stay inside the daily and max-loss limits
     const openRisk = openTrades.reduce((s, t) => s + (t.riskAmount ?? config.riskPerTrade), 0);
-    const worstDay = riskManager.getStatus().dailyLossAmount - openRisk - config.riskPerTrade;
-    const worstTotal = tradeJournal.getPhaseSummary().totalPnL - openRisk - config.riskPerTrade;
+    const manualLoss = Math.min(0, manualFloating);
+    const worstDay = riskManager.getStatus().dailyLossAmount - openRisk - config.riskPerTrade + manualLoss;
+    const worstTotal = tradeJournal.getPhaseSummary().totalPnL - openRisk - config.riskPerTrade + manualLoss;
     if (worstDay <= -config.maxDailyLoss || worstTotal <= -config.maxTotalLoss) {
       this.updatePair(pair, { status: 'Open risk too close to a loss limit — no new trade' });
       return;
@@ -340,7 +346,7 @@ export class TradingBot {
         statuses.push(`${sleeve.id}: own position open`);
         continue;
       }
-      const opened = await this.scanSleeve(pair, price, sleeve, statuses, openTrades[0]?.type);
+      const opened = await this.scanSleeve(pair, price, sleeve, statuses, openTrades[0]?.type ?? manual[0]?.side);
       if (opened) return; // re-scan next cycle (limits re-checked with the new position)
     }
     if (statuses.length > 0) this.updatePair(pair, { status: statuses.join(' | ') });

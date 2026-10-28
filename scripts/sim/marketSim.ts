@@ -236,7 +236,11 @@ interface Scenario {
 interface SimActions {
   setTrading: (on: boolean) => void;
   modify: (sl: (t: SimTrade) => number, tp: (t: SimTrade) => number) => Promise<void>;
+  /** manual dashboard order: SL/TP as $ distance from the market price */
+  manual: (side: 'BUY' | 'SELL', lots: number, slDist: number, tpDist: number) => Promise<void>;
+  closeManual: () => Promise<void>;
 }
+const MANUAL_MAGIC = 260102;
 
 interface SimTrade {
   ticket: number;
@@ -246,6 +250,8 @@ interface SimTrade {
   sl: number;
   tp: number;
   volume: number;
+  magic?: number;
+  openMs?: number;
   exit?: number;
   closeIst?: string;
   reason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'MANUAL_OR_BOT';
@@ -534,6 +540,31 @@ const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: 'S18',
+    title: 'Manual SELL from the dashboard → bot skips a LONG (no hedging) → manual closed → bot SELL traded on its own',
+    day: THU,
+    actions: {
+      '14:00': async (a) => a.manual('SELL', 0.02, 25, 40),
+      '16:30': async (a) => a.closeManual(),
+    },
+    build: (m, d) => {
+      m.sweepLong(istAt(d, '15:00'));
+      m.drift((U + D) / 2, istAt(d, '16:40'), 0.15);
+      m.sweepShort(istAt(d, '18:00'));
+      toTp(m, 'SELL');
+    },
+    expect: (r) => {
+      const bot = r.trades.filter((t) => t.magic !== MANUAL_MAGIC);
+      const man = r.trades.filter((t) => t.magic === MANUAL_MAGIC);
+      return [
+        ['manual SELL opened 14:00, closed by hand 16:30', man.length === 1 && man[0].reason === 'MANUAL_OR_BOT' && (man[0].closeIst ?? '') >= '16:30'],
+        ['bot: only its own SELL after 18:00 (LONG skipped while manual SELL open)', bot.length === 1 && bot[0].side === 'SELL' && bot[0].openIst > '18:00' && bot[0].reason === 'TAKE_PROFIT'],
+        ['journal has only the bot trade', r.journal.length === 1],
+        ['Telegram: manual opened + closed', has(r, /Manual SELL opened/) && has(r, /Manual SELL closed/)],
+      ];
+    },
+  },
+  {
     name: 'S14',
     title: '(1/day, live default) SHORT → SL, then a fresh setup → NOT traded',
     day: WED,
@@ -607,6 +638,7 @@ async function runOne(sc: Scenario): Promise<SimResult> {
   const { bot } = require('../../src/bot/bot');
   const { tradeMonitor } = require('../../src/services/tradeMonitor');
   const dash = require('../../src/server/actions');
+  const { dashboardData } = require('../../src/services/dashboardData');
   const { tradeJournal } = require('../../src/services/tradeJournal');
   const { riskManager } = require('../../src/services/riskManager');
   const { notifier } = require('../../src/services/notifier');
@@ -659,7 +691,7 @@ async function runOne(sc: Scenario): Promise<SimResult> {
     return {
       ticket: p.ticket, symbol: 'XAUUSD', side: p.side, volume: p.volume, priceOpen: p.entry, priceCurrent: +cur.toFixed(2),
       sl: p.sl, tp: p.tp, profit: +((p.side === 'BUY' ? cur - p.entry : p.entry - cur) * p.volume * 100).toFixed(2),
-      swap: 0, magic: 260101, comment: 'fn-bot', time: serverIso(NOW),
+      swap: 0, magic: p.magic ?? 260101, comment: 'fn-bot', time: serverIso(p.openMs ?? NOW),
     };
   };
   Object.assign(mt5Bridge, {
@@ -680,10 +712,10 @@ async function runOne(sc: Scenario): Promise<SimResult> {
       guard('/candles');
       return m.candles(tf, count, start);
     },
-    positions: async () => {
+    positions: async (magic?: number) => {
       guard('/positions');
       processStops();
-      return open.map(posDict);
+      return open.filter((p) => magic === undefined || (p.magic ?? 260101) === magic).map(posDict);
     },
     positionHistory: async (tk: number) => {
       guard('/history');
@@ -691,7 +723,7 @@ async function runOne(sc: Scenario): Promise<SimResult> {
       if (!t || !t.reason) return { ticket: tk, closed: false };
       return { ticket: tk, closed: true, exitPrice: t.exit, exitReason: t.reason, exitTime: serverIso(NOW), profit: t.profit };
     },
-    order: async (req: { side: 'BUY' | 'SELL'; volume: number; sl: number; tp: number }) => {
+    order: async (req: { side: 'BUY' | 'SELL'; volume: number; sl: number; tp: number; magic?: number }) => {
       if (down()) throw new BridgeError('MT5 bridge POST /order failed: timeout of 10000ms exceeded');
       res.orderCalls++;
       processStops();
@@ -701,7 +733,7 @@ async function runOne(sc: Scenario): Promise<SimResult> {
       if (req.side === 'BUY' ? !(req.sl < price && req.tp > price) : !(req.sl > price && req.tp < price)) {
         throw new BridgeError('MT5 bridge POST /order failed: Order rejected: Invalid stops (10016)', 422);
       }
-      const t: SimTrade = { ticket: ++ticket, side: req.side, openIst: istLabel(NOW), entry: price, sl: req.sl, tp: req.tp, volume: req.volume };
+      const t: SimTrade = { ticket: ++ticket, side: req.side, openIst: istLabel(NOW), entry: price, sl: req.sl, tp: req.tp, volume: req.volume, magic: req.magic ?? 260101, openMs: NOW };
       open.push(t);
       res.trades.push(t);
       return { retcode: 10009, comment: 'done', order: t.ticket, deal: t.ticket, volume: req.volume, price, ticket: t.ticket };
@@ -768,6 +800,18 @@ async function runOne(sc: Scenario): Promise<SimResult> {
       }
       await dash.modifyLevels({ ticket: t.ticket, sl: sl(t), tp: tp(t) }).catch((e: Error) => res.errors.push(`modify: ${e.message}`));
     },
+    manual: async (side, lots, slDist, tpDist) => {
+      const bid = m.priceAt(NOW);
+      const entry = side === 'BUY' ? bid + spread(NOW) : bid;
+      const sl = +(side === 'BUY' ? entry - slDist : entry + slDist).toFixed(2);
+      const tp = +(side === 'BUY' ? entry + tpDist : entry - tpDist).toFixed(2);
+      await dash.placeManualOrder({ side, lots, sl, tp }).catch((e: Error) => res.errors.push(`manual: ${e.message}`));
+    },
+    closeManual: async () => {
+      const t = open.find((x) => x.magic === MANUAL_MAGIC);
+      if (!t) return void res.errors.push('closeManual: no manual position');
+      await dash.closePosition({ ticket: t.ticket }).catch((e: Error) => res.errors.push(`closeManual: ${e.message}`));
+    },
   };
 
   while (NOW <= end) {
@@ -800,6 +844,8 @@ async function runOne(sc: Scenario): Promise<SimResult> {
       await b.syncLivePositions(true).catch((e: Error) => res.errors.push(`restart sync: ${e.message}`));
     }
 
+    // the dashboard data feed (all MT5 positions) — the bot reads manual trades from it
+    (dashboardData.snapshot as { positions: unknown[] }).positions = open.map(posDict);
     // one bot cycle (same as TradingBot.mainLoop)
     try {
       if (tradeMonitor.getOpenTrades().length > 0 && !isWeekend()) await b.monitorPositions();
@@ -812,10 +858,13 @@ async function runOne(sc: Scenario): Promise<SimResult> {
     }
 
     // invariants
-    if (open.length > 1) res.violations.push(`${istLabel(NOW)} ${open.length} positions open (max 1)`);
+    const botOpen = open.filter((p) => p.magic !== MANUAL_MAGIC);
+    if (botOpen.length > 1) res.violations.push(`${istLabel(NOW)} ${botOpen.length} bot positions open (max 1)`);
+    if (new Set(open.map((p) => p.side)).size > 1) res.violations.push(`${istLabel(NOW)} BUY and SELL open together (hedging)`);
     for (const p of open) if (!(p.sl > 0 && p.tp > 0)) res.violations.push(`${istLabel(NOW)} position ${p.ticket} without SL/TP`);
     while (seenTrades < res.trades.length) {
       const t = res.trades[seenTrades++];
+      if (t.magic === MANUAL_MAGIC) continue;
       const k = istDay(NOW);
       openedPerDay.set(k, (openedPerDay.get(k) ?? 0) + 1);
       const cap = Number(process.env.FIB_MAX_TRADES_PER_DAY ?? 2);
@@ -832,7 +881,7 @@ async function runOne(sc: Scenario): Promise<SimResult> {
 
   res.journal = tradeJournal.getAllClosed().map((t: { type: string; reason: string; pnl: number }) => ({ side: t.type, reason: t.reason, pnl: t.pnl }));
   res.alerts = notifier.sent.map((a: { text: string }) => a.text.split('\n')[0]);
-  for (const t of res.trades.filter((x) => x.reason)) {
+  for (const t of res.trades.filter((x) => x.reason && x.magic !== MANUAL_MAGIC)) {
     const j = tradeJournal.getAllClosed().find((x: { tradeId: string }) => x.tradeId === `MT5_${t.ticket}`);
     if (!j) res.violations.push(`ticket ${t.ticket} closed at the broker but missing in the journal`);
     else if ((t.reason === 'MANUAL_OR_BOT' ? /STOP_LOSS|TAKE_PROFIT/.test(j.reason) : j.reason !== t.reason) || Math.abs(j.pnl - (t.profit ?? 0)) > 0.02) res.violations.push(`ticket ${t.ticket} journal ${j.reason} $${j.pnl} ≠ broker ${t.reason} $${t.profit}`);

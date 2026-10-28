@@ -21,7 +21,7 @@ import { control } from '../services/control';
 import {
   authEnabled, isAuthorized, checkCredentials, makeSessionToken, sessionCookie, clearCookie, clientIp, lockedFor, recordLogin,
 } from './auth';
-import { setTrading, modifyLevels, ActionError } from './actions';
+import { setTrading, modifyLevels, placeManualOrder, closePosition, ActionError, MANUAL_MAGIC, MANUAL_MAX_LOTS, lossRoom } from './actions';
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', '..', 'public');
 
@@ -187,7 +187,8 @@ function buildAdvanced(): Record<string, unknown> {
     account: acc
       ? { ...acc, balance: r2(acc.balance), equity: r2(acc.equity), margin: r2(acc.margin), freeMargin: r2(acc.freeMargin), marginLevel: acc.marginLevel === null ? null : r2(acc.marginLevel) }
       : null,
-    mt5Positions: dd.positions.map((p) => ({ ...p, byBot: botPositions.has(p.ticket) || p.magic === config.mt5Magic })),
+    mt5Positions: dd.positions.map((p) => ({ ...p, byBot: botPositions.has(p.ticket) || p.magic === config.mt5Magic, manual: p.magic === MANUAL_MAGIC })),
+    manualTrading: { enabled: !tradeExecutor.isDryRun && !marketClient.isSimulated, maxLots: MANUAL_MAX_LOTS, room: lossRoom(), minHoldSec: config.minTradeDurationSeconds },
     challenge: {
       phase: config.challengePhase,
       initialBalance: initial,
@@ -368,6 +369,8 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, p
 
   if (pathname === '/api/control') return json(res, 200, { ok: true, control: setTrading(body.tradingEnabled) });
   if (pathname === '/api/positions/modify') return json(res, 200, { ok: true, ...(await modifyLevels(body)) });
+  if (pathname === '/api/orders') return json(res, 200, { ok: true, ...(await placeManualOrder(body)) });
+  if (pathname === '/api/positions/close') return json(res, 200, { ok: true, ...(await closePosition(body)) });
 
   json(res, 404, { error: 'Not found' });
 }
