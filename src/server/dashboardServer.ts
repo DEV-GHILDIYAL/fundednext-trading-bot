@@ -1,7 +1,6 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
 import { config } from '../config';
 import { logger, getRecentLogs } from '../utils/logger';
 import { getZonedTime, formatClock, isAnySleeveInSession, isWithinTradingSession, formatMinutes, sessionInDisplayZone, sessionClockInDisplayZone } from '../utils/time';
@@ -18,6 +17,11 @@ import { riskManager } from '../services/riskManager';
 import { tradeJournal } from '../services/tradeJournal';
 import { getPairSpec } from '../constants/pairs';
 import { Calculator } from '../utils/calculator';
+import { control } from '../services/control';
+import {
+  authEnabled, isAuthorized, checkCredentials, makeSessionToken, sessionCookie, clearCookie, clientIp, lockedFor, recordLogin,
+} from './auth';
+import { setTrading, modifyLevels, ActionError } from './actions';
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', '..', 'public');
 
@@ -104,6 +108,7 @@ export function buildStatus(): Record<string, unknown> {
     mode: tradeExecutor.isDryRun ? 'PAPER' : 'LIVE',
     dataSource: marketClient.name,
     simVolatility: config.simVolatility,
+    control: control.snapshot,
     bot: {
       enabled: config.botEnabled,
       cycleSeconds: config.cycleIntervalSeconds,
@@ -273,64 +278,129 @@ function buildAdvanced(): Record<string, unknown> {
   };
 }
 
-function safeEqual(a: string, b: string): boolean {
-  const ha = crypto.createHash('sha256').update(a).digest();
-  const hb = crypto.createHash('sha256').update(b).digest();
-  return crypto.timingSafeEqual(ha, hb);
-}
+const SECURITY_HEADERS = {
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+};
 
-function isAuthorized(req: http.IncomingMessage): boolean {
-  if (!config.dashboardUser || !config.dashboardPassword) return true;
-  const header = req.headers.authorization ?? '';
-  if (!header.startsWith('Basic ')) return false;
-  const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
-  const sep = decoded.indexOf(':');
-  if (sep < 0) return false;
-  return safeEqual(decoded.slice(0, sep), config.dashboardUser) && safeEqual(decoded.slice(sep + 1), config.dashboardPassword);
-}
-
-function send(res: http.ServerResponse, status: number, body: string, type: string): void {
-  res.writeHead(status, {
-    'Content-Type': type,
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'DENY',
-    'Referrer-Policy': 'no-referrer',
-  });
+function send(res: http.ServerResponse, status: number, body: string, type: string, extra: Record<string, string> = {}): void {
+  res.writeHead(status, { 'Content-Type': type, ...SECURITY_HEADERS, ...extra });
   res.end(body);
+}
+
+function json(res: http.ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
+  send(res, status, JSON.stringify(body), 'application/json; charset=utf-8', extra);
+}
+
+function redirect(res: http.ServerResponse, to: string, extra: Record<string, string> = {}): void {
+  res.writeHead(302, { Location: to, ...SECURITY_HEADERS, ...extra });
+  res.end();
+}
+
+function page(name: string): string {
+  return fs.readFileSync(path.join(PUBLIC_DIR, name), 'utf8');
+}
+
+/** JSON body, max 10 KB */
+function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > 10240) {
+        reject(new ActionError('Body too large', 413));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try {
+        const v = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+        resolve(v && typeof v === 'object' ? v : {});
+      } catch {
+        reject(new ActionError('Invalid JSON'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+/** POSTs must come from our own page: JSON + custom header (+ same Origin when the browser sends one) */
+function sameSite(req: http.IncomingMessage): boolean {
+  if (req.headers['x-fnb'] !== '1') return false;
+  if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<void> {
+  if (!sameSite(req)) return json(res, 403, { error: 'Forbidden' });
+
+  if (pathname === '/api/login') {
+    const ip = clientIp(req);
+    const wait = lockedFor(ip);
+    if (wait > 0) return json(res, 429, { error: `Too many wrong attempts — try again in ${Math.ceil(wait / 60000)} min` });
+    const body = await readJson(req);
+    if (!authEnabled()) return json(res, 200, { ok: true });
+    const ok = checkCredentials(body.user, body.password);
+    recordLogin(ip, ok);
+    if (!ok) {
+      logger.warn(`🔐 Dashboard login failed from ${ip}`);
+      return json(res, 401, { error: 'Wrong username or password' });
+    }
+    logger.info(`🔐 Dashboard login from ${ip}`);
+    return json(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, makeSessionToken()) });
+  }
+
+  if (pathname === '/api/logout') return json(res, 200, { ok: true }, { 'Set-Cookie': clearCookie(req) });
+
+  if (!isAuthorized(req)) return json(res, 401, { error: 'Login required' });
+  const body = await readJson(req);
+
+  if (pathname === '/api/control') return json(res, 200, { ok: true, control: setTrading(body.tradingEnabled) });
+  if (pathname === '/api/positions/modify') return json(res, 200, { ok: true, ...(await modifyLevels(body)) });
+
+  json(res, 404, { error: 'Not found' });
 }
 
 export function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
   const url = new URL(req.url ?? '/', 'http://localhost');
+  const p = url.pathname;
 
-  if (url.pathname === '/healthz') {
-    send(res, 200, JSON.stringify({ ok: true }), 'application/json');
+  if (p === '/healthz') return json(res, 200, { ok: true });
+
+  if (req.method === 'POST') {
+    handlePost(req, res, p).catch((error) => {
+      if (error instanceof ActionError) return json(res, error.status, { error: error.message });
+      logger.error('Dashboard action failed', error);
+      json(res, 500, { error: (error as Error).message || 'Internal error' });
+    });
     return;
   }
-
-  if (req.method !== 'GET') {
-    send(res, 405, 'Method Not Allowed', 'text/plain');
-    return;
-  }
-
-  if (!isAuthorized(req)) {
-    res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="FundedNext Bot", charset="UTF-8"' });
-    res.end('Authentication required');
-    return;
-  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed', 'text/plain');
 
   try {
-    if (url.pathname === '/api/status') {
-      send(res, 200, JSON.stringify(buildStatus()), 'application/json; charset=utf-8');
-      return;
+    const authed = isAuthorized(req);
+    if (p === '/login' || p === '/login.html') {
+      if (authed && authEnabled()) return redirect(res, '/');
+      return send(res, 200, page('login.html'), 'text/html; charset=utf-8');
     }
-
-    if (url.pathname === '/' || url.pathname === '/index.html') {
-      const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
-      send(res, 200, html, 'text/html; charset=utf-8');
-      return;
+    if (p === '/logout') return redirect(res, '/login', { 'Set-Cookie': clearCookie(req) });
+    if (!authed) {
+      if (p.startsWith('/api/')) return json(res, 401, { error: 'Login required' });
+      return redirect(res, '/login');
     }
-
+    if (p === '/api/status') return json(res, 200, buildStatus());
+    if (p === '/' || p === '/index.html') return send(res, 200, page('index.html'), 'text/html; charset=utf-8');
     send(res, 404, 'Not Found', 'text/plain');
   } catch (error) {
     logger.error('Dashboard request failed', error);

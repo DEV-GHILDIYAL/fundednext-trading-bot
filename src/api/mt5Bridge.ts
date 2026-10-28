@@ -186,6 +186,12 @@ export class Mt5BridgeClient {
     return this.call('post', '/close', { ticket, deviation: config.mt5DeviationPoints });
   }
 
+  /** Change SL/TP of an open position */
+  modify(ticket: number, sl: number, tp: number): Promise<BridgeOrderResult> {
+    logger.info(`✏️ MT5 modify ${ticket} SL ${sl} TP ${tp}`);
+    return this.call('post', '/modify', { ticket, sl, tp });
+  }
+
   positionHistory(ticket: number): Promise<BridgePositionHistory> {
     return this.call('get', `/history/position/${ticket}`);
   }

@@ -156,6 +156,15 @@ export class TradeMonitor {
   }
 
   /** Live mode: take P&L / price straight from the broker position */
+  /** Manual SL/TP change from the dashboard */
+  setLevels(tradeId: string, sl: number, tp: number): void {
+    const trade = this.openTrades.get(tradeId);
+    if (!trade) return;
+    trade.stopLoss = sl;
+    trade.takeProfit = tp;
+    this.save();
+  }
+
   applyBrokerUpdate(tradeId: string, update: { priceCurrent: number; profit: number; sl: number; tp: number }): void {
     const trade = this.openTrades.get(tradeId);
     if (!trade) return;

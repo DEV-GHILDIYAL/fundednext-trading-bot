@@ -7,6 +7,7 @@ import { EntrySignalGenerator, TradeSignal, StrategyParams, defaultStrategyParam
 import { computeIndicators, INDICATOR_WARMUP } from '../strategies/indicators';
 import { evaluateStrategy, isSignal, HTF_FOR } from '../strategies/library';
 import { newsCalendar } from '../strategies/news';
+import { control } from '../services/control';
 import { logAiReview } from '../services/aiReviewLog';
 import { tradeExecutor } from '../services/tradeExecutor';
 import { tradeMonitor, OpenTrade, ExitReason } from '../services/tradeMonitor';
@@ -289,6 +290,16 @@ export class TradingBot {
   private async scanPair(pair: TradingPair): Promise<void> {
     const price = await marketClient.getCurrentPrice(pair);
     this.updatePair(pair, this.quotePatch(price));
+
+    if (!control.tradingEnabled) {
+      const text = 'Trading OFF (dashboard) — no new trades';
+      this.updatePair(pair, { status: text });
+      for (const sl of config.sleeves) {
+        const prev = this.sleeveStatus.get(sl.id);
+        this.sleeveStatus.set(sl.id, { id: sl.id, status: text, updatedAt: new Date().toISOString(), lastSignal: prev?.lastSignal ?? null });
+      }
+      return;
+    }
 
     const openTrades = tradeMonitor.getOpenTrades();
     if (openTrades.length >= config.maxOpenPositions) {

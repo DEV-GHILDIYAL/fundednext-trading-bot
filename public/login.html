@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#090d12">
+<meta name="robots" content="noindex">
+<title>Sign in · FundedNext Bot</title>
+<style>
+  :root {
+    --bg: #090d12; --panel: #10161e; --panel-2: #151d27; --border: #1e2935;
+    --text: #e6edf3; --muted: #8391a2; --red: #f05252; --red-bg: rgba(240, 82, 82, .12);
+    --gold: #e7b84c; --blue: #4c8dff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+  body {
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased;
+    min-height: 100vh; display: grid; place-items: center; padding: 16px;
+    background: radial-gradient(1200px 600px at 50% -10%, rgba(231, 184, 76, .08), transparent 60%), var(--bg);
+  }
+  .box { width: 100%; max-width: 380px; }
+  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; justify-content: center; }
+  .logo { width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(135deg, var(--gold), #b8860b); display: grid; place-items: center; font: 700 14px ui-monospace, Menlo, Consolas, monospace; color: #1a1205; }
+  .brand h1 { font-size: 19px; margin: 0; }
+  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  form { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; display: grid; gap: 14px; }
+  label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+  input {
+    width: 100%; font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 11px 12px; outline: none; transition: border-color .15s;
+  }
+  input:focus { border-color: var(--gold); }
+  .pw { position: relative; }
+  .pw input { padding-right: 64px; }
+  .pw button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: 0; color: var(--muted); font: 600 12px system-ui, sans-serif; cursor: pointer; padding: 6px 8px; }
+  .submit {
+    font: 600 15px system-ui, sans-serif; border: 0; border-radius: 10px; padding: 12px; cursor: pointer;
+    background: linear-gradient(135deg, var(--gold), #c8952a); color: #1a1205; transition: opacity .15s;
+  }
+  .submit:disabled { opacity: .6; cursor: wait; }
+  .err { display: none; background: var(--red-bg); color: var(--red); border: 1px solid rgba(240, 82, 82, .3); border-radius: 10px; padding: 9px 12px; font-size: 13px; }
+  .err.on { display: block; }
+  .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 16px; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main class="box">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">Au</div>
+    <div><h1>FundedNext Trading Bot</h1><p>XAUUSD · Fib Sweep</p></div>
+  </div>
+  <form id="f" novalidate>
+    <div class="err" id="err" role="alert"></div>
+    <label>Username
+      <input id="user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+    </label>
+    <label>Password
+      <span class="pw">
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button type="button" id="show" aria-label="Show password">Show</button>
+      </span>
+    </label>
+    <button class="submit" id="go" type="submit">Sign in</button>
+  </form>
+  <div class="foot">Session stays signed in for 7 days on this device.</div>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  $('show').addEventListener('click', () => {
+    const p = $('password'); const hidden = p.type === 'password';
+    p.type = hidden ? 'text' : 'password'; $('show').textContent = hidden ? 'Hide' : 'Show';
+  });
+  $('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('err'); err.classList.remove('on');
+    const user = $('user').value.trim(), password = $('password').value;
+    if (!user || !password) { err.textContent = 'Enter username and password'; err.classList.add('on'); return; }
+    $('go').disabled = true; $('go').textContent = 'Signing in…';
+    try {
+      const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-FNB': '1' }, body: JSON.stringify({ user, password }) });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) { location.replace('/'); return; }
+      err.textContent = j.error || ('Login failed (HTTP ' + res.status + ')'); err.classList.add('on');
+      $('password').select();
+    } catch (x) {
+      err.textContent = 'Server not reachable'; err.classList.add('on');
+    } finally {
+      $('go').disabled = false; $('go').textContent = 'Sign in';
+    }
+  });
+})();
+</script>
+</body>
+</html>

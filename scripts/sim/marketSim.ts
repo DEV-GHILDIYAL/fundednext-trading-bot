@@ -228,7 +228,14 @@ interface Scenario {
   end?: string;
   /** extra .env values for this scenario */
   env?: Record<string, string>;
+  /** dashboard actions at IST times, e.g. { '14:00': (a) => a.setTrading(false) } */
+  actions?: Record<string, (a: SimActions) => Promise<void>>;
   expect: (r: SimResult) => [string, boolean][];
+}
+
+interface SimActions {
+  setTrading: (on: boolean) => void;
+  modify: (sl: (t: SimTrade) => number, tp: (t: SimTrade) => number) => Promise<void>;
 }
 
 interface SimTrade {
@@ -494,6 +501,39 @@ const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: 'S16',
+    title: 'Trading switched OFF on the dashboard → SHORT setup ignored; back ON → later LONG traded',
+    day: THU,
+    actions: { '14:00': async (a) => a.setTrading(false), '18:00': async (a) => a.setTrading(true) },
+    build: (m, d) => {
+      m.sweepShort(istAt(d, '15:00'));
+      toTp(m, 'SELL');
+      m.sweepLong(istAt(d, '19:00'));
+      toTp(m, 'BUY');
+    },
+    expect: (r) => [
+      ['only the LONG after switching ON', trades(r) === 1 && r.trades[0]?.side === 'BUY' && r.trades[0]?.openIst > '18:00'],
+      ['Telegram: Trading OFF + ON', has(r, /Trading OFF/) && has(r, /Trading ON/)],
+    ],
+  },
+  {
+    name: 'S17',
+    title: 'SL moved to entry from the dashboard → price comes back → closed at breakeven',
+    day: THU,
+    actions: { '15:45': async (a) => a.modify((t) => t.entry, (t) => t.entry - 30) },
+    build: (m, d) => {
+      m.sweepShort(istAt(d, '15:00'));
+      m.drift(U - 7, istAt(d, '15:40'), 0.1);
+      m.drift(U - 7, istAt(d, '16:00'), 0.05);
+      m.drift(U + 4, istAt(d, '16:40'), 0.1);
+    },
+    expect: (r) => [
+      ['1 trade, SL moved to entry on MT5', trades(r) === 1 && r.trades[0]?.sl === r.trades[0]?.entry],
+      ['closed at the new SL ≈ $0', r.trades[0]?.reason === 'STOP_LOSS' && Math.abs(r.trades[0]?.profit ?? 99) < 1],
+      ['Telegram: SL/TP changed', has(r, /SL\/TP changed/)],
+    ],
+  },
+  {
     name: 'S14',
     title: '(1/day, live default) SHORT → SL, then a fresh setup → NOT traded',
     day: WED,
@@ -566,6 +606,7 @@ async function runOne(sc: Scenario): Promise<SimResult> {
   const { groqClient, GroqUnavailableError } = require('../../src/api/groq');
   const { bot } = require('../../src/bot/bot');
   const { tradeMonitor } = require('../../src/services/tradeMonitor');
+  const dash = require('../../src/server/actions');
   const { tradeJournal } = require('../../src/services/tradeJournal');
   const { riskManager } = require('../../src/services/riskManager');
   const { notifier } = require('../../src/services/notifier');
@@ -665,6 +706,14 @@ async function runOne(sc: Scenario): Promise<SimResult> {
       res.trades.push(t);
       return { retcode: 10009, comment: 'done', order: t.ticket, deal: t.ticket, volume: req.volume, price, ticket: t.ticket };
     },
+    modify: async (tk: number, sl: number, tp: number) => {
+      guard('/modify');
+      const t = open.find((x) => x.ticket === tk);
+      if (!t) throw new BridgeError('MT5 bridge POST /modify failed: Position not found', 404);
+      t.sl = sl;
+      t.tp = tp;
+      return { retcode: 10009, comment: 'done', order: 0, deal: 0, volume: 0, price: 0 };
+    },
     close: async (tk: number) => {
       const t = open.find((x) => x.ticket === tk);
       if (!t) throw new BridgeError('position not found', 404);
@@ -708,7 +757,26 @@ async function runOne(sc: Scenario): Promise<SimResult> {
   const openedPerDay = new Map<string, number>();
   let seenTrades = 0;
 
+  const actionsDone = new Set<string>();
+  const simActions: SimActions = {
+    setTrading: (on) => dash.setTrading(on),
+    modify: async (sl, tp) => {
+      const t = open[0];
+      if (!t) {
+        res.errors.push(`${istLabel(NOW)} modify: no open position`);
+        return;
+      }
+      await dash.modifyLevels({ ticket: t.ticket, sl: sl(t), tp: tp(t) }).catch((e: Error) => res.errors.push(`modify: ${e.message}`));
+    },
+  };
+
   while (NOW <= end) {
+    for (const [time, fn] of Object.entries(sc.actions ?? {})) {
+      if (!actionsDone.has(time) && NOW >= istAt(sc.day, time)) {
+        actionsDone.add(time);
+        await fn(simActions);
+      }
+    }
     // cron-like jobs
     if (!fibAlertSent && NOW >= istAt(sc.day, '12:40')) {
       fibAlertSent = true;

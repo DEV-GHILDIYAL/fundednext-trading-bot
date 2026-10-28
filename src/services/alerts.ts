@@ -155,6 +155,28 @@ export const alerts = {
     });
   },
 
+  /** Trading switch flipped on the dashboard */
+  tradingSwitched(enabled: boolean): void {
+    void notifier.card(enabled ? 'success' : 'warn', {
+      title: enabled ? '▶️ Trading ON' : '⏸️ Trading OFF',
+      rows: [['Changed', `${ist()} from the dashboard`]],
+      note: enabled ? 'The bot takes new trades again as the strategy says.' : 'No new trades until switched back ON. Open trades keep their SL/TP.',
+    });
+  },
+
+  /** SL/TP changed by hand on the dashboard */
+  levelsChanged(p: { ticket: number; side: string; entry: number; oldSl: number; oldTp: number; sl: number; tp: number; risk: number | null }): void {
+    void notifier.card('info', {
+      title: `✏️ SL/TP changed · ${p.side} #${p.ticket}`,
+      rows: [
+        ['Entry', p.entry.toFixed(2)],
+        ['Stop loss', `${p.oldSl ? p.oldSl.toFixed(2) : '—'} → ${p.sl.toFixed(2)}`],
+        ['Take profit', `${p.oldTp ? p.oldTp.toFixed(2) : '—'} → ${p.tp.toFixed(2)}`],
+        ...(p.risk !== null ? ([['Risk now', p.risk <= 0 ? 'none (SL in profit)' : usd(p.risk)]] as [string, string][]) : []),
+      ],
+    });
+  },
+
   feedDown(minutes: number, error: string): void {
     void notifier.card('error', { title: 'MT5 connection lost', rows: [['Down for', `${minutes} min`], ['Since', ist(new Date(Date.now() - minutes * 60000))]], note: error }, 'feed-down', 30 * 60000);
   },

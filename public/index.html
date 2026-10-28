@@ -177,6 +177,51 @@
   footer { color: var(--muted); font-size: 12px; text-align: center; padding: 8px 0 20px; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
   :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
+  /* control bar */
+  .control { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; margin-bottom: var(--gap); border-left: 4px solid var(--green); }
+  .control.off { border-left-color: var(--red); background: linear-gradient(90deg, rgba(240,82,82,.07), var(--panel) 45%); }
+  .control .ttl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
+  .control .state { font-size: 20px; font-weight: 700; margin-top: 2px; }
+  .control .state.on { color: var(--green); } .control .state.off { color: var(--red); }
+  .control .why { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .switch { position: relative; display: inline-flex; align-items: center; gap: 12px; cursor: pointer; border: 0; background: none; color: var(--text); font: 600 14px system-ui, sans-serif; padding: 6px 0; }
+  .switch .track { width: 58px; height: 32px; border-radius: 999px; background: var(--red-bg); border: 1px solid rgba(240,82,82,.4); position: relative; transition: background .2s, border-color .2s; flex: none; }
+  .switch .knob { position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: var(--red); transition: transform .2s, background .2s; }
+  .switch.on .track { background: var(--green-bg); border-color: rgba(34,197,94,.45); }
+  .switch.on .knob { transform: translateX(26px); background: var(--green); }
+  .switch:disabled { opacity: .6; cursor: wait; }
+  .hdr-actions { display: flex; align-items: center; gap: 8px; }
+  .btn { font: 600 13px system-ui, sans-serif; border-radius: 9px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+  .btn:hover { border-color: #2c3a4a; }
+  .btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 7px; }
+  .btn.primary { background: linear-gradient(135deg, var(--gold), #c8952a); color: #1a1205; border-color: transparent; }
+  .btn.danger { background: var(--red); color: #fff; border-color: transparent; }
+  .btn.ok { background: var(--green); color: #04130a; border-color: transparent; }
+  .btn:disabled { opacity: .55; cursor: wait; }
+
+  /* modal + toast */
+  .modal { position: fixed; inset: 0; background: rgba(3,6,10,.72); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
+  .modal.on { display: flex; }
+  .dlg { width: 100%; max-width: 440px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; max-height: calc(100vh - 32px); overflow-y: auto; }
+  .dlg h3 { margin: 0 0 4px; font-size: 17px; }
+  .dlg .sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .fields label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+  .fields input { width: 100%; font: 600 16px var(--mono); color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 10px; outline: none; }
+  .fields input:focus { border-color: var(--gold); }
+  .nudge { display: flex; gap: 4px; margin-top: 4px; }
+  .nudge button { flex: 1; font: 600 11px var(--mono); padding: 4px 0; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; }
+  .preview { margin-top: 12px; background: var(--panel-2); border-radius: 10px; padding: 10px 12px; font-size: 13px; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+  .preview .v { text-align: right; font-family: var(--mono); }
+  .dlg .err { margin-top: 10px; background: var(--red-bg); color: var(--red); border-radius: 9px; padding: 8px 10px; font-size: 13px; display: none; }
+  .dlg .err.on { display: block; }
+  .dlg .warn { margin-top: 10px; background: var(--amber-bg); color: var(--amber); border-radius: 9px; padding: 8px 10px; font-size: 13px; display: none; }
+  .dlg .warn.on { display: block; }
+  .dlg .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%) translateY(20px); background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 60; max-width: calc(100vw - 32px); }
+  .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.ok { border-color: rgba(34,197,94,.5); } .toast.bad { border-color: rgba(240,82,82,.6); color: var(--red); }
+
   @media (max-width: 1180px) {
     .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .r-chart, .r-21 { grid-template-columns: minmax(0, 1fr); }
@@ -196,6 +241,20 @@
     #chart { height: 260px; }
     .qbox .v { font-size: 18px; }
     .log div { grid-template-columns: 50px 40px 1fr; gap: 6px; }
+    .clocks .clk:not(.main) { display: none; }
+    .control .state { font-size: 18px; }
+    /* open positions become cards */
+    #posTable thead { display: none; }
+    #posTable, #posTable tbody, #posTable tr, #posTable td { display: block; width: 100%; }
+    #posTable tr { background: var(--panel-2); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
+    #posTable td { display: flex; justify-content: space-between; gap: 10px; border: 0; padding: 4px 0; white-space: normal; text-align: right; }
+    #posTable td::before { content: attr(data-l); color: var(--muted); font-size: 12px; text-align: left; }
+    #posTable td.opt { display: flex; }
+    #posTable td.act { justify-content: flex-end; padding-top: 8px; }
+    #posTable td.act::before { content: none; }
+    #posTable td.act .btn { width: 100%; justify-content: center; padding: 9px; }
+    #posTable td.empty { justify-content: center; }
+    #posTable td.empty::before { content: none; }
   }
   @media (max-width: 340px) { .kpis { grid-template-columns: minmax(0, 1fr); } }
 </style>
@@ -215,8 +274,21 @@
       <div class="clk"><div class="t num" id="clkNy">--:--</div><div class="l">New York</div></div>
       <div class="clk main"><div class="t num" id="clock">--:--</div>
         <div class="conn"><span class="dot" id="connDot"></span><span id="connText">Connecting…</span></div></div>
+      <div class="hdr-actions"><a class="btn sm" href="/logout" id="logout">Logout</a></div>
     </div>
   </header>
+
+  <!-- trading switch -->
+  <section class="card control" id="controlBar">
+    <div>
+      <div class="ttl">Auto trading</div>
+      <div class="state" id="ctlState">—</div>
+      <div class="why" id="ctlWhy"></div>
+    </div>
+    <button class="switch" id="ctlSwitch" type="button" role="switch" aria-checked="false" aria-label="Auto trading on/off">
+      <span class="track"><span class="knob"></span></span><span id="ctlLabel">—</span>
+    </button>
+  </section>
 
   <div class="notices" id="notices"></div>
 
@@ -284,8 +356,8 @@
   <section class="card" style="margin-bottom:var(--gap)">
     <h2>Open positions <span class="r num muted" id="openInfo"></span></h2>
     <div class="table-wrap">
-      <table>
-        <thead><tr><th>Strategy</th><th>Side</th><th class="r">Lots</th><th class="r">Entry</th><th class="r">Now</th><th class="r opt">SL</th><th class="r opt">TP</th><th class="r opt">To SL</th><th class="r opt">To TP</th><th class="r">P&amp;L</th><th class="r">R</th><th class="r opt">Opened</th><th class="opt">Ticket</th></tr></thead>
+      <table id="posTable">
+        <thead><tr><th>Strategy</th><th>Side</th><th class="r">Lots</th><th class="r">Entry</th><th class="r">Now</th><th class="r opt">SL</th><th class="r opt">TP</th><th class="r opt">To SL</th><th class="r opt">To TP</th><th class="r">P&amp;L</th><th class="r">R</th><th class="r opt">Opened</th><th class="opt">Ticket</th><th></th></tr></thead>
         <tbody id="open"></tbody>
       </table>
     </div>
@@ -343,6 +415,33 @@
   <footer id="footer"></footer>
 </div>
 
+<div class="modal" id="editModal" role="dialog" aria-modal="true" aria-labelledby="edTitle">
+  <div class="dlg">
+    <h3 id="edTitle">Change SL / TP</h3>
+    <div class="sub" id="edSub"></div>
+    <div class="fields">
+      <label>Stop loss<input id="edSl" type="number" step="0.01" inputmode="decimal">
+        <span class="nudge"><button type="button" data-n="edSl:-1">−1</button><button type="button" data-n="edSl:1">+1</button><button type="button" data-be="1">Entry</button></span></label>
+      <label>Take profit<input id="edTp" type="number" step="0.01" inputmode="decimal">
+        <span class="nudge"><button type="button" data-n="edTp:-1">−1</button><button type="button" data-n="edTp:1">+1</button></span></label>
+    </div>
+    <div class="preview" id="edPreview"></div>
+    <div class="warn" id="edWarn"></div>
+    <div class="err" id="edErr"></div>
+    <div class="acts"><button class="btn" type="button" id="edCancel">Cancel</button><button class="btn primary" type="button" id="edSave">Save to MT5</button></div>
+  </div>
+</div>
+
+<div class="modal" id="ctlModal" role="dialog" aria-modal="true" aria-labelledby="ctlTitle">
+  <div class="dlg">
+    <h3 id="ctlTitle">Turn trading off?</h3>
+    <div class="sub" id="ctlText"></div>
+    <div class="acts"><button class="btn" type="button" id="ctlCancel">Cancel</button><button class="btn" type="button" id="ctlConfirm">Confirm</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
 <script>
 (function () {
   const REFRESH_MS = 3000;
@@ -378,6 +477,7 @@
 
   let lastOk = 0;
   let data = null;
+  const posRows = new Map();
   let chartTf = 'H1';
   let lastBid = null;
   let tfChosen = false;
@@ -422,7 +522,9 @@
       badge('MAX ' + d.settings.maxOpenPositions + ' OPEN');
 
     // notices
+    renderControl(d);
     const notes = [];
+    if (d.control && !d.control.tradingEnabled) notes.push(['⏸️ Auto trading is OFF — the bot will not open new trades until you switch it ON. Open trades keep their SL/TP.', 'red']);
     if (d.dataSource === 'SIMULATED') notes.push(['Simulated prices — paper trades only, not real performance.', '']);
     if (d.health && d.health.bridge && !d.health.bridge.ok && d.dataSource === 'MT5') notes.push(['MT5 bridge not responding: ' + (d.health.bridge.lastError || 'unknown error'), 'red']);
     if (d.news && d.news.blackout) notes.push(['⛔ ' + d.news.blackout + ' — no new entries right now (open trades keep SL/TP).', 'red']);
@@ -528,20 +630,23 @@
           return { sleeve: o.sleeve || (m.byBot ? 'bot' : 'manual'), side: m.side, lots: m.volume, entry: m.priceOpen, now: m.priceCurrent, sl: m.sl, tp: m.tp, pnl: m.profit + (m.swap || 0), risk: o.riskAmount, opened: o.openedAt || m.time, ticket: m.ticket };
         })
       : (d.openTrades || []).map((o) => ({ sleeve: o.sleeve || 'bot', side: o.type, lots: o.lots, entry: o.entryPrice, now: o.currentPrice, sl: o.stopLoss, tp: o.takeProfit, pnl: o.pnl, risk: o.riskAmount, opened: o.openedAt, ticket: o.ticket || o.tradeId }));
+    posRows.clear();
     const totalPnl = rows.reduce((a, r) => a + r.pnl, 0);
     $('openInfo').innerHTML = rows.length ? rows.length + ' open · <span class="' + cls(totalPnl) + '">' + money(totalPnl) + '</span>' : '';
     $('open').innerHTML = rows.length ? rows.map((r) => {
       const toSl = r.sl ? Math.abs(r.now - r.sl) : null, toTp = r.tp ? Math.abs(r.tp - r.now) : null;
-      return '<tr><td><span class="tag">' + esc(r.sleeve) + '</span></td>' +
-        '<td><span class="side ' + esc(r.side) + '">' + esc(r.side) + '</span></td>' +
-        '<td class="r num">' + Number(r.lots || 0).toFixed(2) + '</td>' +
-        '<td class="r num">' + px(r.entry) + '</td><td class="r num">' + px(r.now) + '</td>' +
-        '<td class="r num opt neg">' + px(r.sl) + '</td><td class="r num opt pos">' + px(r.tp) + '</td>' +
-        '<td class="r num opt">' + (toSl !== null ? '$' + toSl.toFixed(2) : '—') + '</td><td class="r num opt">' + (toTp !== null ? '$' + toTp.toFixed(2) : '—') + '</td>' +
-        '<td class="r num ' + cls(r.pnl) + '">' + money(r.pnl) + '</td>' +
-        '<td class="r num ' + cls(r.pnl) + '">' + (r.risk ? fmtR(r.pnl / r.risk) : '—') + '</td>' +
-        '<td class="r num opt">' + fmtDT(r.opened) + '</td><td class="num opt dim">' + esc(r.ticket) + '</td></tr>';
-    }).join('') : '<tr><td colspan="13" class="empty">No open positions</td></tr>';
+      posRows.set(String(r.ticket), r);
+      return '<tr><td data-l="Strategy"><span class="tag">' + esc(r.sleeve) + '</span></td>' +
+        '<td data-l="Side"><span class="side ' + esc(r.side) + '">' + esc(r.side) + '</span></td>' +
+        '<td data-l="Lots" class="r num">' + Number(r.lots || 0).toFixed(2) + '</td>' +
+        '<td data-l="Entry" class="r num">' + px(r.entry) + '</td><td data-l="Now" class="r num">' + px(r.now) + '</td>' +
+        '<td data-l="Stop loss" class="r num opt neg">' + px(r.sl) + '</td><td data-l="Take profit" class="r num opt pos">' + px(r.tp) + '</td>' +
+        '<td data-l="To SL" class="r num opt">' + (toSl !== null ? '$' + toSl.toFixed(2) : '—') + '</td><td data-l="To TP" class="r num opt">' + (toTp !== null ? '$' + toTp.toFixed(2) : '—') + '</td>' +
+        '<td data-l="P&amp;L" class="r num ' + cls(r.pnl) + '">' + money(r.pnl) + '</td>' +
+        '<td data-l="R" class="r num ' + cls(r.pnl) + '">' + (r.risk ? fmtR(r.pnl / r.risk) : '—') + '</td>' +
+        '<td data-l="Opened" class="r num opt">' + fmtDT(r.opened) + '</td><td data-l="Ticket" class="num opt dim">' + esc(r.ticket) + '</td>' +
+        '<td class="act r"><button class="btn sm" data-edit="' + esc(r.ticket) + '">✏️ SL / TP</button></td></tr>';
+    }).join('') : '<tr><td colspan="14" class="empty">No open positions</td></tr>';
 
     // account
     $('accSrc').textContent = acc ? (acc.source === 'MT5' ? 'live from MT5 · ' + ago(d.health.bridge.updatedAt) : 'paper (computed)') : '';
@@ -877,11 +982,141 @@
     svg.innerHTML = s;
   }
 
+  // ---------- actions ----------
+  async function post(url, body) {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-FNB': '1' }, body: JSON.stringify(body) });
+    if (res.status === 401) { location.replace('/login'); throw new Error('Login required'); }
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || 'HTTP ' + res.status);
+    return j;
+  }
+  let toastTimer = null;
+  function toast(text, kind) {
+    const t = $('toast'); t.textContent = text; t.className = 'toast on ' + (kind || '');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = 'toast'; }, 3500);
+  }
+  function openModal(id) { $(id).classList.add('on'); }
+  function closeModal(id) { $(id).classList.remove('on'); }
+  document.querySelectorAll('.modal').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m) m.classList.remove('on'); }));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.modal.on').forEach((m) => m.classList.remove('on')); });
+
+  // trading switch
+  let ctlEnabled = null;
+  function renderControl(d) {
+    const c = d.control || { tradingEnabled: true };
+    ctlEnabled = c.tradingEnabled;
+    $('controlBar').classList.toggle('off', !c.tradingEnabled);
+    $('ctlState').className = 'state ' + (c.tradingEnabled ? 'on' : 'off');
+    $('ctlState').textContent = c.tradingEnabled ? 'ON — bot trades automatically' : 'OFF — no new trades';
+    $('ctlWhy').textContent = (c.tradingEnabled
+      ? 'Takes the strategy setup every trading day (Fib Sweep, 14:30–21:00 IST).'
+      : 'Open trades keep their SL/TP and are still watched.') + (c.updatedAt ? ' · changed ' + fmtDT(c.updatedAt) : '');
+    const sw = $('ctlSwitch');
+    sw.classList.toggle('on', c.tradingEnabled);
+    sw.setAttribute('aria-checked', String(c.tradingEnabled));
+    $('ctlLabel').textContent = c.tradingEnabled ? 'ON' : 'OFF';
+  }
+  $('ctlSwitch').addEventListener('click', () => {
+    if (ctlEnabled === null) return;
+    const turnOn = !ctlEnabled;
+    $('ctlTitle').textContent = turnOn ? 'Turn auto trading ON?' : 'Turn auto trading OFF?';
+    $('ctlText').textContent = turnOn
+      ? 'The bot will open real trades on MT5 again whenever the strategy gives a setup.'
+      : 'The bot will not open any new trade until you switch it back ON. Trades already open keep their SL/TP.';
+    $('ctlConfirm').className = 'btn ' + (turnOn ? 'ok' : 'danger');
+    $('ctlConfirm').textContent = turnOn ? 'Turn ON' : 'Turn OFF';
+    $('ctlConfirm').dataset.on = turnOn ? '1' : '0';
+    openModal('ctlModal');
+  });
+  $('ctlCancel').addEventListener('click', () => closeModal('ctlModal'));
+  $('ctlConfirm').addEventListener('click', async () => {
+    const on = $('ctlConfirm').dataset.on === '1';
+    $('ctlConfirm').disabled = true;
+    try {
+      const j = await post('/api/control', { tradingEnabled: on });
+      if (data) { data.control = j.control; render(data); }
+      closeModal('ctlModal');
+      toast(on ? 'Auto trading is ON' : 'Auto trading is OFF', 'ok');
+    } catch (e) { toast(e.message, 'bad'); } finally { $('ctlConfirm').disabled = false; }
+  });
+
+  // SL / TP editor
+  let edRow = null;
+  const contract = 100; // XAUUSD: 100 oz per lot
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-edit]');
+    if (!b) return;
+    const r = posRows.get(b.dataset.edit);
+    if (!r) return;
+    edRow = r;
+    $('edTitle').textContent = 'Change SL / TP · ' + r.side + ' #' + r.ticket;
+    $('edSub').textContent = r.side + ' ' + Number(r.lots || 0).toFixed(2) + ' lot @ ' + px(r.entry) + ' · now ' + px(r.now);
+    $('edSl').value = r.sl ? Number(r.sl).toFixed(2) : '';
+    $('edTp').value = r.tp ? Number(r.tp).toFixed(2) : '';
+    $('edErr').classList.remove('on');
+    edPreview();
+    openModal('editModal');
+    setTimeout(() => $('edSl').focus(), 50);
+  });
+  function edCheck(sl, tp) {
+    if (!edRow) return 'No position';
+    const r = edRow, p = (data && data.bot && data.bot.pairs && data.bot.pairs[0]) || {};
+    const bid = typeof p.bid === 'number' ? p.bid : r.now, ask = typeof p.ask === 'number' ? p.ask : r.now;
+    if (!isFinite(sl) || !isFinite(tp) || sl <= 0 || tp <= 0) return 'Enter valid SL and TP';
+    if (r.side === 'BUY') { if (sl >= bid) return 'BUY: SL must be below the current price ' + px(bid); if (tp <= ask) return 'BUY: TP must be above the current price ' + px(ask); }
+    else { if (sl <= ask) return 'SELL: SL must be above the current price ' + px(ask); if (tp >= bid) return 'SELL: TP must be below the current price ' + px(bid); }
+    return null;
+  }
+  function edPreview() {
+    if (!edRow) return;
+    const r = edRow, sl = parseFloat($('edSl').value), tp = parseFloat($('edTp').value);
+    const q = Number(r.lots || 0) * contract;
+    const dir = r.side === 'BUY' ? 1 : -1;
+    const risk = isFinite(sl) ? (r.entry - sl) * dir * q : NaN;
+    const reward = isFinite(tp) ? (tp - r.entry) * dir * q : NaN;
+    const oldRisk = r.sl ? (r.entry - r.sl) * dir * q : NaN;
+    $('edPreview').innerHTML =
+      '<span class="muted">If SL hits</span><span class="v ' + (risk > 0 ? 'neg' : 'pos') + '">' + (isFinite(risk) ? money(-risk) : '—') + '</span>' +
+      '<span class="muted">If TP hits</span><span class="v pos">' + (isFinite(reward) ? money(reward) : '—') + '</span>' +
+      '<span class="muted">Risk : reward</span><span class="v">' + (risk > 0 && reward > 0 ? '1 : ' + (reward / risk).toFixed(2) : '—') + '</span>';
+    const warn = $('edWarn');
+    if (isFinite(risk) && isFinite(oldRisk) && risk > oldRisk + 0.5) { warn.textContent = '⚠️ Wider stop: loss if SL hits grows from ' + usd(oldRisk) + ' to ' + usd(risk) + '.'; warn.classList.add('on'); }
+    else if (isFinite(risk) && data && data.challenge && risk > data.challenge.roomToDailyLimit) { warn.textContent = '⚠️ This loss would break the daily loss limit.'; warn.classList.add('on'); }
+    else warn.classList.remove('on');
+    const err = edCheck(sl, tp);
+    $('edSave').disabled = !!err;
+    $('edErr').textContent = err || ''; $('edErr').classList.toggle('on', !!err && $('edSl').value !== '' && $('edTp').value !== '');
+  }
+  ['edSl', 'edTp'].forEach((id) => $(id).addEventListener('input', edPreview));
+  document.querySelectorAll('[data-n]').forEach((b) => b.addEventListener('click', () => {
+    const [id, step] = b.dataset.n.split(':');
+    const v = parseFloat($(id).value) || (edRow ? edRow.now : 0);
+    $(id).value = (v + Number(step)).toFixed(2); edPreview();
+  }));
+  document.querySelector('[data-be]').addEventListener('click', () => { if (edRow) { $('edSl').value = Number(edRow.entry).toFixed(2); edPreview(); } });
+  $('edCancel').addEventListener('click', () => closeModal('editModal'));
+  $('edSave').addEventListener('click', async () => {
+    if (!edRow) return;
+    const sl = parseFloat($('edSl').value), tp = parseFloat($('edTp').value);
+    const err = edCheck(sl, tp);
+    if (err) { $('edErr').textContent = err; $('edErr').classList.add('on'); return; }
+    $('edSave').disabled = true; $('edSave').textContent = 'Saving…';
+    try {
+      await post('/api/positions/modify', { ticket: edRow.ticket, sl, tp });
+      closeModal('editModal');
+      toast('SL/TP updated on MT5 ✓', 'ok');
+      setTimeout(tick, 300);
+    } catch (e) {
+      $('edErr').textContent = e.message; $('edErr').classList.add('on');
+    } finally { $('edSave').disabled = false; $('edSave').textContent = 'Save to MT5'; }
+  });
+
   function setConn(ok, text) { $('connDot').className = 'dot ' + (ok ? 'ok' : 'bad'); $('connText').textContent = text; }
 
   async function tick() {
     try {
       const res = await fetch('/api/status', { cache: 'no-store' });
+      if (res.status === 401) { location.replace('/login'); return; }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const json = await res.json();
       try {
