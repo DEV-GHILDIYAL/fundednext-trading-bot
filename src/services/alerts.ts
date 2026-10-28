@@ -90,7 +90,7 @@ export const alerts = {
   tradeClosed(trade: OpenTrade, exitPrice: number, pnl: number, reason: string): void {
     const risk = trade.riskAmount && trade.riskAmount > 0 ? trade.riskAmount : config.riskPerTrade;
     const r = pnl / risk;
-    const label = /TAKE_PROFIT|TP/i.test(reason) ? 'Take profit hit' : /STOP_LOSS|SL/i.test(reason) ? 'Stop loss hit' : reason.replace(/_/g, ' ').toLowerCase();
+    const label = /TAKE_PROFIT|TP/i.test(reason) ? 'Take profit hit' : /STOP_LOSS|SL/i.test(reason) ? 'Stop loss hit' : (reason.includes('_') ? reason.replace(/_/g, ' ').toLowerCase() : reason);
     const today = riskManager.getStatus();
     void notifier.card(pnl >= 0 ? 'success' : 'warn', {
       title: `${pnl >= 0 ? '✅' : '❌'} ${label} · ${usd(pnl, true)} (${r >= 0 ? '+' : ''}${r.toFixed(2)}R)`,
@@ -107,7 +107,7 @@ export const alerts = {
   },
 
   /** 12:40 IST: today's Fib Sweep lines (only when fibSweep runs) */
-  fibLevels(newsDay: string | null): void {
+  fibLevels(newsDay: string | null, late: { title: string; at: Date; closeAt: Date } | null = null): void {
     if (!config.sleeves.some((s) => s.strategy === 'fibSweep')) return;
     const f = dashboardData.snapshot.fib;
     const today = getZonedTime(new Date(), 'Asia/Kolkata').dateKey;
@@ -123,6 +123,7 @@ export const alerts = {
         ['SHORT line (Fib 2)', f.upper.toFixed(2)],
         ['LONG line (Fib −1)', f.lower.toFixed(2)],
         ['Entries', '14:30 – 21:00 IST'],
+        ...(late ? ([['News tonight', `${late.title} ${ist(late.at)}`], ['Auto-close', `open trade closes at ${ist(late.closeAt)}`]] as [string, string][]) : []),
       ],
     });
   },

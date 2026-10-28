@@ -37,6 +37,22 @@ describe('Telegram alerts', () => {
   });
 });
 
+describe('Fib levels alert on a late-news day', () => {
+  it('shows tonight\'s release and the auto-close time', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { dashboardData } = require('../../src/services/dashboardData');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { config } = require('../../src/config');
+    config.sleeves = [{ id: 'fibSweep:M5', strategy: 'fibSweep', timeframe: 'M5', rewardRatio: 2 }];
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    dashboardData.snapshot.fib = { date: today, bodyHigh: 4010, bodyLow: 4000, range: 10, upper: 4020, lower: 3990, candles: 13, complete: true };
+    const at = new Date('2026-10-28T18:00:00Z');
+    alerts.fibLevels(null, { title: 'FOMC statement', at, closeAt: new Date(at.getTime() - 30 * 60000) });
+    expect(last()).toMatch(/News tonight: FOMC statement 23:30 IST/);
+    expect(last()).toMatch(/Auto-close: open trade closes at 23:00 IST/);
+  });
+});
+
 describe('Validator.validateRRRange (fibSweep reward is ~1.6–1.9R at "1:2")', () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { Validator } = require('../../src/utils/validator');

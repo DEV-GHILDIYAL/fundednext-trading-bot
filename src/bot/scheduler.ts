@@ -35,9 +35,9 @@ export class BotScheduler {
     // 12:40 IST: today's Fib Sweep levels (or "no trading today" on major news days)
     this.add('fibLevels', '40 12 * * 1-5', ist, () => {
       void newsCalendar
-        .majorNewsDay(new Date())
+        .dayPlan(new Date())
         .catch(() => null)
-        .then((day) => alerts.fibLevels(config.newsFilter ? day : null));
+        .then((plan) => alerts.fibLevels(config.newsFilter ? plan?.skip ?? null : null, config.newsFilter ? plan?.late ?? null : null));
     });
     // 23:30 IST: daily summary
     this.add('dailySummary', '30 23 * * 1-5', ist, () => alerts.dailySummary());

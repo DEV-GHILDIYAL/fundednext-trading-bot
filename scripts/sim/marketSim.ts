@@ -258,6 +258,7 @@ interface SimResult {
 const WED = '2026-11-04'; // after US DST ended → server UTC+2
 const THU = '2026-10-29'; // US DST → server UTC+3
 const CPI = '2026-11-10'; // US CPI release day
+const FOMC = '2026-10-28'; // FOMC statement 14:00 ET = 23:30 IST (after the entry window)
 
 const toTp = (m: Market, side: 'BUY' | 'SELL', minutes = 45) =>
   m.drift(side === 'SELL' ? U - 19 : D + 19, m.t + minutes * MIN, 0.2);
@@ -475,6 +476,21 @@ const SCENARIOS: Scenario[] = [
     expect: (r) => [
       ['1 trade only (no duplicate after restart)', trades(r) === 1],
       ['journal has exactly one TP close', r.journal.length === 1 && r.journal[0]?.reason === 'TAKE_PROFIT'],
+    ],
+  },
+  {
+    name: 'S15',
+    title: 'FOMC at 23:30 IST → trades normally, open trade force-closed at 23:00',
+    day: FOMC,
+    end: '23:59',
+    build: (m, d) => {
+      m.sweepShort(istAt(d, '20:40')); // entry ~20:55
+      m.drift(U - 2, istAt(d, '23:20'), 0.08); // neither SL nor TP before 23:00
+    },
+    expect: (r) => [
+      ['1 trade opened before 21:00', trades(r) === 1 && r.trades[0]?.openIst < '21:00'],
+      ['closed by the bot at 23:00–23:05 before FOMC', /Closed before/.test(r.journal[0]?.reason ?? '') && (r.trades[0]?.closeIst ?? '') >= '23:00' && (r.trades[0]?.closeIst ?? '') <= '23:05'],
+      ['no "No trading today"', !has(r, /No trading today/)],
     ],
   },
   {
@@ -696,7 +712,8 @@ async function runOne(sc: Scenario): Promise<SimResult> {
     // cron-like jobs
     if (!fibAlertSent && NOW >= istAt(sc.day, '12:40')) {
       fibAlertSent = true;
-      alerts.fibLevels(await newsCalendar.majorNewsDay(new Date()).catch(() => null));
+      const plan = await newsCalendar.dayPlan(new Date()).catch(() => null);
+      alerts.fibLevels(plan?.skip ?? null, plan?.late ?? null);
     }
     if (!summarySent && NOW >= istAt(sc.day, '23:30')) {
       summarySent = true;
@@ -750,7 +767,7 @@ async function runOne(sc: Scenario): Promise<SimResult> {
   for (const t of res.trades.filter((x) => x.reason)) {
     const j = tradeJournal.getAllClosed().find((x: { tradeId: string }) => x.tradeId === `MT5_${t.ticket}`);
     if (!j) res.violations.push(`ticket ${t.ticket} closed at the broker but missing in the journal`);
-    else if (j.reason !== t.reason || Math.abs(j.pnl - (t.profit ?? 0)) > 0.02) res.violations.push(`ticket ${t.ticket} journal ${j.reason} $${j.pnl} ≠ broker ${t.reason} $${t.profit}`);
+    else if ((t.reason === 'MANUAL_OR_BOT' ? /STOP_LOSS|TAKE_PROFIT/.test(j.reason) : j.reason !== t.reason) || Math.abs(j.pnl - (t.profit ?? 0)) > 0.02) res.violations.push(`ticket ${t.ticket} journal ${j.reason} $${j.pnl} ≠ broker ${t.reason} $${t.profit}`);
   }
   return res;
 }

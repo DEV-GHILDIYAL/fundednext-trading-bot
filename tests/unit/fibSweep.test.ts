@@ -110,6 +110,24 @@ describe('fibSweep (PDF example, 8 Oct 2026)', () => {
   });
 });
 
+describe('news day plan (late release)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { newsDayPlan } = require('../../src/strategies/news');
+  const ev = builtInEvents(new Date('2026-10-01T00:00:00Z'), new Date('2026-11-30T00:00:00Z'));
+  it('FOMC 23:30 IST → trade, close at 23:00 IST', () => {
+    const p = newsDayPlan(ev, new Date('2026-10-28T07:00:00Z'));
+    expect(p.skip).toBeNull();
+    expect(p.late.closeAt.toISOString()).toBe('2026-10-28T17:30:00.000Z'); // 23:00 IST
+  });
+  it('NFP / CPI at 18:00–19:00 IST → skip the day', () => {
+    expect(newsDayPlan(ev, new Date('2026-10-02T07:00:00Z')).skip).toMatch(/Payrolls/);
+    expect(newsDayPlan(ev, new Date('2026-10-14T07:00:00Z')).skip).toMatch(/CPI/);
+  });
+  it('normal day → nothing', () => {
+    expect(newsDayPlan(ev, new Date('2026-10-27T07:00:00Z'))).toEqual({ skip: null, late: null });
+  });
+});
+
 describe('broker server time (NY-close)', () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { brokerOffsetMs, serverToUtc, liveServerOffsetMs } = require('../../src/utils/time');

@@ -685,12 +685,24 @@ export class TradingBot {
       }
     }
 
+    await this.closeBeforeLateNews();
+
     const total = riskManager.getStatus().dailyLossAmount + tradeMonitor.calculateTotalPnL();
     if (total <= -config.maxDailyLoss && tradeMonitor.getOpenTrades().length > 0) {
       logger.error(`❌ DAILY LOSS LIMIT HIT ($${total.toFixed(2)}). Closing all positions.`);
       void notifier.notify('error', `Daily loss limit hit ($${total.toFixed(2)}) — closing all positions`);
       await this.closeAllPositions('Daily loss limit reached');
     }
+  }
+
+  /** Late major release today (e.g. FOMC 23:30 IST): close open trades 30 min before it */
+  private async closeBeforeLateNews(): Promise<void> {
+    if (!config.newsFilter || tradeMonitor.getOpenTrades().length === 0) return;
+    const plan = await newsCalendar.dayPlan(new Date()).catch(() => null);
+    const late = plan?.late;
+    if (!late || Date.now() < late.closeAt.getTime()) return;
+    logger.warn(`📰 ${late.title} at ${late.at.toISOString()} — closing open trades before the release`);
+    await this.closeAllPositions(`Closed before ${late.title}`);
   }
 
   /**

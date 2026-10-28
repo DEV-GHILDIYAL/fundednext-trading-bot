@@ -84,6 +84,30 @@ export function majorNewsDays(events: NewsEvent[]): Map<string, string> {
   return out;
 }
 
+/**
+ * fibSweep news-day plan for one IST day (Dev, 28 Oct):
+ *  - major release (NFP/CPI/PPI/FOMC) before 21:30 IST → skip the whole day (as before)
+ *  - every major release at/after 21:30 IST (e.g. FOMC 23:30 IST) → trade normally (entries end 21:00),
+ *    and close any open trade 30 min before the release
+ */
+export const LATE_NEWS = { fromMin: 21 * 60 + 30, closeBeforeMin: 30 };
+export interface NewsDayPlan {
+  /** reason to skip the day, or null */
+  skip: string | null;
+  /** late release today: trade, but close open trades at closeAt */
+  late: { title: string; at: Date; closeAt: Date } | null;
+}
+export function newsDayPlan(events: NewsEvent[], now: Date): NewsDayPlan {
+  const today = getZonedTime(now, 'Asia/Kolkata').dateKey;
+  const major = events
+    .filter((e) => MAJOR_NEWS.test(e.title) && getZonedTime(e.at, 'Asia/Kolkata').dateKey === today)
+    .sort((a, b) => a.at.getTime() - b.at.getTime());
+  if (!major.length) return { skip: null, late: null };
+  const first = major[0];
+  if (getZonedTime(first.at, 'Asia/Kolkata').minutesOfDay < LATE_NEWS.fromMin) return { skip: `Major US news day (${first.title})`, late: null };
+  return { skip: null, late: { title: first.title, at: first.at, closeAt: new Date(first.at.getTime() - LATE_NEWS.closeBeforeMin * 60000) } };
+}
+
 /** Built-in schedule between two UTC instants: NFP (first Friday 08:30 ET) + FOMC (14:00 ET) + known CPI/PPI */
 export function builtInEvents(from: Date, to: Date): NewsEvent[] {
   const out: NewsEvent[] = [];
@@ -180,12 +204,16 @@ export class NewsCalendar {
     this.fetchedAt = this.lastError ? Date.now() - 5.5 * 3600000 : Date.now();
   }
 
-  /** "Major US news day (CPI …)" when today (IST) has NFP / CPI / PPI / FOMC, else null */
-  async majorNewsDay(now: Date = new Date()): Promise<string | null> {
+  /** Today's (IST) fibSweep news plan: skip the day, or trade with a forced close before a late release */
+  async dayPlan(now: Date = new Date()): Promise<NewsDayPlan> {
     await this.refresh();
     const events = [...builtInEvents(new Date(now.getTime() - 2 * 86400000), new Date(now.getTime() + 2 * 86400000)), ...this.feed];
-    const title = majorNewsDays(events).get(getZonedTime(now, 'Asia/Kolkata').dateKey);
-    return title ? `Major US news day (${title})` : null;
+    return newsDayPlan(events, now);
+  }
+
+  /** "Major US news day (CPI …)" when fibSweep should skip today, else null (late releases don't skip) */
+  async majorNewsDay(now: Date = new Date()): Promise<string | null> {
+    return (await this.dayPlan(now)).skip;
   }
 
   /** Events from 1 h ago to `hours` ahead (built-in + feed, de-duplicated), oldest first */
