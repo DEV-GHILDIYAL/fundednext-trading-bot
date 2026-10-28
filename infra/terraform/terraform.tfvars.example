@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+region       = "ap-south-1"
+mt5_login    = "12345678"
+mt5_password = "your-mt5-password"
+mt5_server   = "FundedNext-Server3"
+
+# Your home/office public IP for RDP — https://checkip.amazonaws.com
+admin_cidr = "1.2.3.4/32"
+
+# Private IP of the existing Ubuntu bot (EC2 console → fundednext-bot-prod → Private IPv4)
+bot_private_ip = "172.31.x.x"
+
+# New AWS account? Create the Ubuntu bot box too and leave bot_private_ip empty:
+# create_bot_instance = true
+# bot_private_ip      = ""
+
+# Only if the repo is private (fine-grained token, Contents: read-only)
+# github_token = "github_pat_..."
+
+# Set false if the account already has the GitHub OIDC provider
+# create_github_oidc_provider = false

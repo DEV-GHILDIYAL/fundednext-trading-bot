@@ -15,6 +15,11 @@ interface OpenEntry {
   stopLoss: number;
   takeProfit: number;
   openedAt: string;
+  /** Portfolio strategy (e.g. asianBreakout:M30) */
+  sleeve?: string;
+  /** $ at risk when opened (1R) */
+  riskAmount?: number;
+  lots?: number;
 }
 
 interface CloseEntry {
@@ -41,6 +46,9 @@ export interface ClosedTrade {
   reason: string;
   openedAt: string;
   closedAt: string;
+  sleeve?: string;
+  riskAmount?: number;
+  lots?: number;
 }
 
 export interface DailyStats {
@@ -118,6 +126,9 @@ export class TradeJournal {
       reason: entry.reason,
       openedAt: open.openedAt,
       closedAt: entry.closedAt,
+      sleeve: open.sleeve,
+      riskAmount: open.riskAmount,
+      lots: open.lots,
     });
   }
 
@@ -141,7 +152,15 @@ export class TradeJournal {
       stopLoss: trade.stopLoss,
       takeProfit: trade.takeProfit,
       openedAt: trade.openedAt.toISOString(),
+      sleeve: trade.sleeve,
+      riskAmount: trade.riskAmount,
+      lots: trade.lots,
     });
+  }
+
+  /** Every closed trade, oldest first (analytics) */
+  getAllClosed(): ClosedTrade[] {
+    return [...this.closed];
   }
 
   recordClose(tradeId: string, exitPrice: number, pnl: number, reason: string): void {

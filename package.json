@@ -1,7 +1,7 @@
 {
   "name": "fundednext-trading-bot",
   "version": "1.0.0",
-  "description": "Automated London Breakout trading bot for FundedNext",
+  "description": "London breakout trading bot for FundedNext (XAUUSD on MT5) with Groq AI review",
   "main": "dist/index.js",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
@@ -12,7 +12,15 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "backtest": "ts-node scripts/backtest.ts",
+    "ai-audit": "ts-node scripts/aiAudit.ts",
+    "fetch-history": "ts-node scripts/fetchHistory.ts",
+    "fib-analysis": "ts-node scripts/fibAnalysis.ts",
+    "preflight": "bash scripts/preflight.sh",
+    "e2e": "ts-node scripts/e2eLiveCycle.ts",
+    "sim": "TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/sim/marketSim.ts",
+    "test:bridge": "cd bridge && BRIDGE_MOCK=1 BRIDGE_TOKEN=test python -m pytest -q"
   },
   "keywords": [
     "trading",

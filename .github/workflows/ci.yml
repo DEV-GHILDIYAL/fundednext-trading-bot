@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main] # main is tested inside the deploy workflows
+  workflow_call:
+
+jobs:
+  bot:
+    name: Bot (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm test -- --ci
+      - run: npm run build
+
+  bridge:
+    name: MT5 bridge (Python, mock MT5)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: bridge/requirements.txt
+      - run: pip install -r requirements.txt pytest httpx
+      - run: python -m pytest -q
+        env:
+          BRIDGE_MOCK: '1'
+          BRIDGE_TOKEN: test
+
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive || echo "::warning::Run 'terraform fmt -recursive' in infra/terraform"
+      - run: terraform init -backend=false
+      - run: terraform validate

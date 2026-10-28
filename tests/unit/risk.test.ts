@@ -23,7 +23,7 @@ describe('Position sizing & P&L', () => {
 
 describe('TradeMonitor', () => {
   it('detects stop loss and take profit after the minimum hold', () => {
-    const monitor = new TradeMonitor();
+    const monitor = new TradeMonitor(null);
     const units = Calculator.calculatePositionSize(30, 1.1, 1.095);
     monitor.registerTrade({
       tradeId: 'T1', pair: 'EURUSD', type: 'BUY', entryPrice: 1.1, currentPrice: 1.1,
@@ -36,7 +36,7 @@ describe('TradeMonitor', () => {
   });
 
   it('refuses to close a trade before the 30 second minimum', () => {
-    const monitor = new TradeMonitor();
+    const monitor = new TradeMonitor(null);
     const units = Calculator.calculatePositionSize(config.riskPerTrade, 1.1, 1.095);
     monitor.registerTrade({
       tradeId: 'T2', pair: 'EURUSD', type: 'BUY', entryPrice: 1.1, currentPrice: 1.1,

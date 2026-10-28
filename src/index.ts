@@ -14,13 +14,14 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   logger.info(`Received ${signal} — shutting down gracefully`);
 
-  // Hard stop if graceful shutdown hangs (allow the 30s minimum trade duration)
-  setTimeout(() => process.exit(0), config.minTradeDurationSeconds * 1000 + 5000).unref();
+  // Hard stop if graceful shutdown hangs
+  setTimeout(() => process.exit(0), 10000).unref();
 
+  // Open positions are NOT closed on shutdown: they keep their SL/TP (paper trades are
+  // persisted to data/open-trades.json, live ones stay on MT5) and are restored on start.
   try {
     scheduler.stopAll();
     bot.stop();
-    await bot.closeAllPositions('Process shutdown');
     await dashboardServer.stop();
   } catch (error) {
     logger.error('Error during shutdown', error);
@@ -43,10 +44,10 @@ async function main(): Promise<void> {
   logger.info('════════════════════════════════════════');
   logger.info(`Environment: ${config.nodeEnv} | Node ${process.version}`);
   logger.info(`Time: ${now.dateKey} ${formatClock(now)} (${config.timezone})`);
-  logger.info(`Bot enabled: ${config.botEnabled} | Dry run: ${config.dryRun}`);
+  logger.info(`Bot enabled: ${config.botEnabled} | Dry run: ${config.dryRun} | Data source: ${config.dataSource}`);
   logger.info(
     `Risk: ${config.riskPercent}% ($${config.riskPerTrade})/trade | Max ${config.maxTradesPerDay} trades/day | ` +
-      `1:2 RR | no hedging | min hold ${config.minTradeDurationSeconds}s`
+      `1:${config.profitRatio} RR | no hedging | exits SL/TP only | min hold ${config.minTradeDurationSeconds}s`
   );
   logger.info(
     `FundedNext Phase ${config.challengePhase}: target $${config.targetProfit} (${config.profitTargetPercent}%) | ` +
@@ -64,7 +65,7 @@ async function main(): Promise<void> {
   }
 
   if (!config.dryRun) {
-    logger.warn('⚠️ DRY_RUN=false but live MT5 execution is not implemented — orders will be refused.');
+    logger.warn(`⚠️ LIVE TRADING (DRY_RUN=false) — real orders on MT5 via ${config.mt5BridgeUrl}`);
   }
 
   await bot.start();
